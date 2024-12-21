@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Explorer</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', path='style.css') }}">
+</head>
+<body>
+    <main class="container">
+        <header>
+            <h1>Video Explorer</h1>
+            <p>Analyze videos using AI and chat with their content</p>
+        </header>
+
+        <section id="search-section">
+            <h2>Search Videos</h2>
+            <div class="grid">
+                <input type="text" id="category-id" placeholder="Filter by category ID">
+                <input type="text" id="search-query" placeholder="Search by keyword">
+                <button id="search-btn">Search Videos</button>
+            </div>
+            <p><small>Leave fields empty to see most recent videos</small></p>
+        </section>
+
+        <section id="videos-section" style="display: none;">
+            <div class="section-header">
+                <h2>Available Videos</h2>
+                <div class="selection-info" style="display: none;">
+                    <span id="selected-count">0 selected</span>
+                    <button id="analyze-btn" disabled>Analyze Selected</button>
+                </div>
+            </div>
+            <div id="video-list"></div>
+        </section>
+
+        <section id="analysis-section" style="display: none;">
+            <h2>Video Analysis Results & Insights</h2>
+            <div id="analysis-results"></div>
+        </section>
+
+        <section id="chat-section" style="display: none;">
+            <h2>Chat with Videos</h2>
+            <div id="chat-messages"></div>
+            <div class="grid">
+                <input type="text" id="chat-input" placeholder="Ask a question about the videos...">
+                <button id="chat-btn">Send</button>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        // Configuration
+        const kalturaConfig = {
+            partnerId: '5896392',
+            uiconfId: '56062442',
+            baseUrl: 'https://cdnapisec.kaltura.com'
+        };
+    
+        // Utility functions
+        const $ = (selector) => document.querySelector(selector);
+        const show = (el) => el.style.display = 'block';
+        const hide = (el) => el.style.display = 'none';
+    
+        // Store analysis results for chat context
+        let analysisContext = [];
+        let selectedVideos = new Set();
+        let activeSegment = null;
+
+        // Search videos
+        $('#search-btn').addEventListener('click', async () => {
+            const categoryId = $('#category-id').value;
+            const query = $('#search-query').value;
+            
+            $('#search-btn').setAttribute('aria-busy', 'true');
+            try {
+                // Only include non-empty parameters
+                const params = new URLSearchParams();
+                if (categoryId) params.append('category_id', categoryId);
+                if (query) params.append('query', query);
+                
+                const url = `/api/videos${params.toString() ? '?' + params.toString() : ''}`;
+                console.log('Fetching videos from:', url);
+                
+                const response = await fetch(url);
+                console.log('Response status:', response.status);
+                
+                const data = await response.json();
+                console.log('API Response:', data);
+                
+                if (data.error) throw new Error(data.error);
+                
+                if (!data.videos || !Array.isArray(data.videos)) {
+                    throw new Error('Invalid response format from server');
+                }
+                
+                if (data.videos.length === 0) {
+                    alert('No videos found. Please try different search criteria.');
+                    return;
+                }
+                
+                const videoList = $('#video-list');
+                videoList.innerHTML = data.videos.map(video => `
+                    <article data-video-id="${video.id}">
+                        <img src="${video.thumbnail_url}" alt="${video.name}">
+                        <h3>${video.name}</h3>
+                        <p>${video.description || ''}</p>
+                        <small>Duration: ${formatDuration(video.duration)}</small>
+                    </article>
+                `).join('');
+                
+                show($('#videos-section'));
+                selectedVideos.clear();
+                hide($('.selection-info'));
+            } catch (error) {
+                alert('Error searching videos: ' + error.message);
+            } finally {
+                $('#search-btn').removeAttribute('aria-busy');
+            }
+        });
+
+        // Handle video selection
+        $('#video-list').addEventListener('click', (event) => {
+            const article = event.target.closest('article');
+            if (!article) return;
+            
+            const videoId = article.dataset.videoId;
+            const isSelected = article.classList.contains('selected');
+            
+            if (isSelected) {
+                selectedVideos.delete(videoId);
+                article.classList.remove('selected');
+            } else {
+                selectedVideos.add(videoId);
+                article.classList.add('selected');
+            }
+            
+            // Update selection info
+            const count = selectedVideos.size;
+            const selectionInfo = $('.selection-info');
+            
+            if (count > 0) {
+                $('#selected-count').textContent = `${count} selected`;
+                $('#analyze-btn').disabled = false;
+                show(selectionInfo);
+            } else {
+                hide(selectionInfo);
+            }
+        });
+
+        // Analyze selected videos
+        $('#analyze-btn').addEventListener('click', async () => {
+            // Reset state for new analysis
+            $('#analysis-results').innerHTML = '';
+            $('#chat-messages').innerHTML = '';
+            analysisContext = [];
+            
+            // Show analysis section with loading state
+            show($('#analysis-section'));
+            $('#analysis-results').innerHTML = `
+                <article class="analysis-loading">
+                    <p aria-busy="true">Analyzing selected videos...</p>
+                </article>
+            `;
+            
+            hide($('#chat-section'));
+            
+            // Reset any active tabs to default state
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.tab === 'summary');
+            });
+            document.querySelectorAll('.tab-panel').forEach(panel => {
+                panel.classList.toggle('active', panel.dataset.tab === 'summary');
+            });
+            
+            $('#analyze-btn').setAttribute('aria-busy', 'true');
+            try {
+                console.log('Analyzing videos:', Array.from(selectedVideos));
+                
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(Array.from(selectedVideos))
+                });
+                
+                console.log('Response status:', response.status);
+                const data = await response.json();
+                console.log('Analysis response:', data);
+                
+                if (data.error) throw new Error(data.error);
+                
+                // Handle both possible response formats
+                const results = data.results || data;
+                if (!results || (!Array.isArray(results) && typeof results !== 'object')) {
+                    console.error('Invalid response format:', results);
+                    throw new Error('Invalid response format from server');
+                }
+                
+                // Convert single result to array if needed
+                const resultsArray = Array.isArray(results) ? results : [results];
+                analysisContext = resultsArray;
+                displayAnalysis(resultsArray);
+                
+                show($('#analysis-section'));
+                show($('#chat-section'));
+            } catch (error) {
+                alert('Error analyzing videos: ' + error.message);
+            } finally {
+                $('#analyze-btn').removeAttribute('aria-busy');
+            }
+        });
+
+        // Display analysis results
+        function displayAnalysis(results) {
+            console.log('Displaying analysis for:', results);
+            
+            if (!Array.isArray(results)) {
+                console.log('Converting single result to array');
+                results = [results];
+            }
+
+            const analysisHtml = results.map((result, index) => {
+                console.log('Processing result:', result);
+                
+                // Handle different response structures
+                const analysis = result.analysis || result;
+                if (!analysis) {
+                    console.error('No analysis data in result:', result);
+                    return '';
+                }
+
+                // Extract content from the analysis
+                let content;
+                if (typeof analysis === 'string') {
+                    // If analysis is a string, use it directly
+                    content = analysis;
+                } else {
+                    // Otherwise, format the object
+                    content = formatAnalysis(analysis);
+                }
+
+                // Get the video title from the selected videos
+                const videoEl = document.querySelector(`#video-list article[data-video-id="${result.video_id || ''}"]`);
+                const videoTitle = videoEl ? videoEl.querySelector('h3').textContent : `Video Analysis ${result.video_id || ''}`;
+                return `
+                    <article class="analysis-accordion">
+                        <header class="analysis-header">
+                            <h3 class="analysis-title">${videoTitle}</h3>
+                            <button class="toggle-btn" aria-label="Toggle analysis">
+                                <svg width="20" height="20" viewBox="0 0 20 20">
+                                    <path d="M5 7.5L10 12.5L15 7.5" stroke="currentColor" stroke-width="2" fill="none"/>
+                                </svg>
+                            </button>
+                        </header>
+                        <div class="analysis-content">
+                            <div class="tab-container">
+                                <nav class="tab-nav">
+                                    <button class="tab-btn active" data-tab="summary" aria-label="View Summary">
+                                        <svg width="16" height="16" viewBox="0 0 16 16" style="margin-right: 4px">
+                                            <path d="M2 2h12v2H2zm0 4h12v2H2zm0 4h12v2H2z" fill="currentColor"/>
+                                        </svg>
+                                        Summary
+                                    </button>
+                                    <button class="tab-btn" data-tab="insights" aria-label="View Key Takeaways">
+                                        <svg width="16" height="16" viewBox="0 0 16 16" style="margin-right: 4px">
+                                            <path d="M8 1L1 15h14L8 1zm0 12a1 1 0 100 2 1 1 0 000-2zm0-7v5" stroke="currentColor" fill="none" stroke-width="2"/>
+                                        </svg>
+                                        Key Takeaways
+                                    </button>
+                                    <button class="tab-btn" data-tab="topics" aria-label="View Topics">
+                                        <svg width="16" height="16" viewBox="0 0 16 16" style="margin-right: 4px">
+                                            <path d="M2 4h4v4H2zm8 0h4v4h-4zM2 10h4v4H2zm8 0h4v4h-4z" fill="currentColor"/>
+                                        </svg>
+                                        Topics
+                                    </button>
+                                    <button class="tab-btn" data-tab="segments" aria-label="View Key Moments">
+                                        <svg width="16" height="16" viewBox="0 0 16 16" style="margin-right: 4px">
+                                            <path d="M3 3l10 5-10 5V3z" fill="currentColor"/>
+                                        </svg>
+                                        Key Moments
+                                    </button>
+                                </nav>
+                                <div class="tab-content">
+                                    ${content}
+                                </div>
+                            </div>
+                        </div>
+                    </article>
+                `;
+            }).filter(html => html).join('');
+            
+            $('#analysis-results').innerHTML = analysisHtml || '<p>No analysis results available.</p>';
+            
+            // Setup accordion and tab functionality
+            setupAnalysisInteractions();
+        }
+
+        // Format analysis data
+        function formatAnalysis(analysis) {
+            console.log('Formatting analysis:', analysis);
+            
+            if (!analysis) return 'No analysis data available.';
+
+            // Handle string response
+            if (typeof analysis === 'string') return analysis;
+
+            // Handle object response
+            const sections = {
+                summary: 'Summary',
+                insights: 'Key Insights',
+                topics: 'Main Topics',
+                segments: 'Key Segments'
+            };
+
+            return Object.entries(sections)
+                .map(([key, title]) => `
+                    <div class="${key}">
+                        <h4>${title}</h4>
+                        <p>${analysis[key] || `No ${title.toLowerCase()} available.`}</p>
+                    </div>
+                `)
+                .join('');
+        }
+
+        // Chat functionality
+        $('#chat-btn').addEventListener('click', async () => {
+            const question = $('#chat-input').value.trim();
+            if (!question) return;
+            
+            appendMessage('You', question);
+            $('#chat-input').value = '';
+            $('#chat-btn').setAttribute('aria-busy', 'true');
+            
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        question: question,
+                        context: analysisContext
+                    })
+                });
+                const data = await response.json();
+                
+                if (data.error) throw new Error(data.error);
+                
+                appendMessage('AI', data.answer);
+            } catch (error) {
+                appendMessage('System', 'Error: ' + error.message);
+            } finally {
+                $('#chat-btn').removeAttribute('aria-busy');
+            }
+        });
+
+        // Setup analysis interactions
+        function setupAnalysisInteractions() {
+            const analysisResults = $('#analysis-results');
+            
+            // Handle accordion toggles
+            analysisResults.addEventListener('click', (e) => {
+                const header = e.target.closest('.analysis-header');
+                if (header) {
+                    const accordion = header.closest('.analysis-accordion');
+                    accordion.classList.toggle('expanded');
+                }
+            });
+
+            // Handle segment clicks and video player
+            analysisResults.addEventListener('click', (e) => {
+                const segmentEntry = e.target.closest('.segment-entry');
+                if (!segmentEntry) return;
+
+                // Update active state
+                if (activeSegment) {
+                    activeSegment.classList.remove('active');
+                }
+                segmentEntry.classList.add('active');
+                activeSegment = segmentEntry;
+
+                // Get segment data
+                const videoId = segmentEntry.dataset.videoId;
+                const startTime = parseFloat(segmentEntry.dataset.time);
+                const duration = parseFloat(segmentEntry.dataset.duration) || 300;
+                const endTime = startTime + duration;
+
+                // Create player iframe
+                const playerUrl = new URL(`${kalturaConfig.baseUrl}/p/${kalturaConfig.partnerId}/embedPlaykitJs/uiconf_id/${kalturaConfig.uiconfId}`);
+                playerUrl.searchParams.set('iframeembed', 'true');
+                playerUrl.searchParams.set('entry_id', videoId);
+                playerUrl.searchParams.set('kalturaStartTime', Math.floor(startTime));
+                playerUrl.searchParams.set('kalturaClipTo', Math.floor(endTime));
+                playerUrl.searchParams.set('autoPlay', 'true');
+
+                const iframe = document.createElement('iframe');
+                iframe.src = playerUrl.toString();
+                iframe.setAttribute('allowfullscreen', '');
+                iframe.setAttribute('webkitallowfullscreen', '');
+                iframe.setAttribute('mozAllowFullScreen', '');
+                iframe.setAttribute('allow', 'autoplay *; fullscreen *; encrypted-media *');
+                iframe.setAttribute('frameborder', '0');
+
+                // Show player in the dedicated player area
+                const playerContainer = segmentEntry.closest('.segments').querySelector('.segments-player');
+                playerContainer.innerHTML = '';
+                playerContainer.appendChild(iframe);
+                playerContainer.classList.add('active');
+            });
+
+            // Handle tab navigation
+            analysisResults.addEventListener('click', (e) => {
+                const tabBtn = e.target.closest('.tab-btn');
+                if (!tabBtn) return;
+
+                const tabContainer = tabBtn.closest('.tab-container');
+                const targetTab = tabBtn.dataset.tab;
+                
+                // Update active tab button
+                tabContainer.querySelectorAll('.tab-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn === tabBtn);
+                });
+                
+                // Show selected tab panel
+                tabContainer.querySelectorAll('.tab-panel').forEach(panel => {
+                    panel.classList.toggle('active', panel.dataset.tab === targetTab);
+                });
+            });
+
+            // Expand first analysis by default
+            const firstAnalysis = analysisResults.querySelector('.analysis-accordion');
+            if (firstAnalysis) {
+                firstAnalysis.classList.add('expanded');
+            }
+        }
+
+        function appendMessage(sender, message) {
+            const messageEl = document.createElement('article');
+            messageEl.setAttribute('data-sender', sender);
+            messageEl.classList.add('summary'); // Add summary class for consistent formatting
+            
+            // Format the message similar to analysis text
+            const formattedMessage = message
+                // Handle headings
+                .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+                .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+                .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+                // Handle bullet points
+                .replace(/^[•\-\*] (.*$)/gm, '<li>$1</li>')
+                // Handle bold text
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                // Handle paragraphs
+                .split('\n')
+                .map(line => {
+                    line = line.trim();
+                    if (!line) return '';
+                    
+                    // If line contains list items, collect them
+                    if (line.includes('<li>')) {
+                        return line;
+                    }
+                    // Skip wrapping if already a heading or other HTML
+                    if (line.startsWith('<')) {
+                        return line;
+                    }
+                    // Wrap regular text in paragraph tags
+                    return `<p>${line}</p>`;
+                })
+                .filter(line => line)
+                .join('\n')
+                // Group consecutive list items into ul elements
+                .replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+            messageEl.innerHTML = `
+                <strong>${sender}</strong>
+                ${formattedMessage}
+            `;
+            $('#chat-messages').appendChild(messageEl);
+            messageEl.scrollIntoView({behavior: 'smooth'});
+        }
+
+        // Utility functions
+        function formatDuration(seconds) {
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            
+            if (h > 0) {
+                return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+            }
+            if (m > 0) {
+                return `${m}:${String(s).padStart(2, '0')}`;
+            }
+            return `${s}s`;
+        }
+
+        function formatAnalysis(analysis) {
+            // Format summary with markdown
+            const formatSummary = (summary) => {
+                if (!summary) return '';
+                
+                // Process markdown elements
+                let formatted = summary
+                    // Handle headings
+                    .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+                    .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+                    .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+                    // Handle bullet points
+                    .replace(/^[•\-\*] (.*$)/gm, '<li>$1</li>')
+                    // Handle bold text
+                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                    // Handle paragraphs
+                    .split('\n')
+                    .map(line => {
+                        line = line.trim();
+                        if (!line) return '';
+                        
+                        // If line contains list items, collect them
+                        if (line.includes('<li>')) {
+                            return line;
+                        }
+                        // Skip wrapping if already a heading or other HTML
+                        if (line.startsWith('<')) {
+                            return line;
+                        }
+                        // Wrap regular text in paragraph tags
+                        return `<p>${line}</p>`;
+                    })
+                    .filter(line => line)
+                    .join('\n')
+                    // Group consecutive list items into ul elements
+                    .replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+
+                return formatted;
+            };
+
+            // Format insights with importance levels
+            const formatInsights = (insights) => {
+                if (!Array.isArray(insights)) return '';
+                return insights.map(insight => {
+                    // Remove any bullet points that might be in the text
+                    const cleanInsight = insight.replace(/^[•\-\*]\s*/, '');
+                    return `<div>${cleanInsight}</div>`;
+                }).join('');
+            };
+
+            // Format topics with varying sizes based on importance
+            const formatTopics = (topics) => {
+                if (!Array.isArray(topics)) return '';
+                // Shuffle topics to create more visual interest
+                return topics
+                    .sort(() => Math.random() - 0.5)
+                    .map(topic => {
+                        // Handle both string and object formats
+                        const topicName = typeof topic === 'string' ? topic : topic.name;
+                        const importance = typeof topic === 'object' && topic.importance ? topic.importance : 1;
+                        // Remove any bullet points that might be in the text
+                        const cleanTopic = topicName.replace(/^[•\-\*]\s*/, '');
+                        // Map importance (1-5) to size classes
+                        const sizeClasses = ['topic-xs', 'topic-sm', 'topic-md', 'topic-lg', 'topic-xl'];
+                        const sizeClass = sizeClasses[Math.min(Math.floor(importance) - 1, 4)] || 'topic-md';
+                        return `<div class="${sizeClass}">${cleanTopic}</div>`;
+                    })
+                    .join('');
+            };
+
+            // Format video segments with intelligent grouping
+            const formatSegments = (timestamps) => {
+                if (!Array.isArray(timestamps)) return '';
+                
+                // Check if we have any meaningful segments
+                if (timestamps.length === 1 && timestamps[0].timestamp === 0) {
+                    return `<div class="no-segments-message">
+                        <p>This video is too short to extract meaningful segments.</p>
+                        <p>Try analyzing longer videos to see chapter breakdowns and key moments.</p>
+                    </div>`;
+                }
+                
+                const firstVideoEl = document.querySelector('#video-list article.selected');
+                if (!firstVideoEl) return '';
+                const videoId = firstVideoEl.dataset.videoId;
+                
+                // Group segments that are too close together (within 5 seconds)
+                const groupedSegments = timestamps.reduce((acc, curr, idx) => {
+                    if (idx === 0) {
+                        acc.push([curr]);
+                        return acc;
+                    }
+                    
+                    const prevGroup = acc[acc.length - 1];
+                    const prevTs = prevGroup[prevGroup.length - 1];
+                    const timeDiff = Math.abs(parseFloat(curr.timestamp) - parseFloat(prevTs.timestamp));
+                    
+                    // If segments are close and descriptions are related, group them
+                    if (timeDiff < 5 && areDescriptionsRelated(prevTs.description, curr.description)) {
+                        prevGroup.push(curr);
+                    } else {
+                        acc.push([curr]);
+                    }
+                    return acc;
+                }, []);
+
+                return groupedSegments.map(group => {
+                    const mainSegment = group[0];
+                    const time = parseFloat(mainSegment.timestamp).toFixed(2);
+                    const thumbnailUrl = `https://cfvod.kaltura.com/p/2748741/sp/274874100/thumbnail/entry_id/${videoId}/width/160/type/2/bgcolor/000000/quality/85/vid_sec/${time}`;
+                    
+                    // Combine descriptions if there are multiple segments in the group
+                    const description = group.length > 1
+                        ? group.map(ts => ts.description).join(' | ')
+                        : mainSegment.description;
+                    
+                    return `<div class="segment-entry" data-time="${time}" data-video-id="${videoId}" data-duration="300">
+                        <div class="segment-thumbnail">
+                            <img src="${thumbnailUrl}" alt="Thumbnail at ${time}s">
+                        </div>
+                        <div class="segment-content">
+                            <h4 class="segment-title">${description.split('.')[0]}.</h4>
+                            <div class="segment-desc">${description.split('.').slice(1).join('.')}</div>
+                        </div>
+                        <div class="segment-time">${formatDuration(time)}</div>
+                    </div>`;
+                }).join('');
+            };
+
+            // Helper function to check if descriptions are related
+            function areDescriptionsRelated(desc1, desc2) {
+                // Convert descriptions to lowercase for comparison
+                const d1 = desc1.toLowerCase();
+                const d2 = desc2.toLowerCase();
+                
+                // Check for common words (excluding stop words)
+                const words1 = new Set(d1.split(/\W+/).filter(w => w.length > 3));
+                const words2 = new Set(d2.split(/\W+/).filter(w => w.length > 3));
+                
+                let commonWords = 0;
+                for (const word of words1) {
+                    if (words2.has(word)) commonWords++;
+                }
+                
+                // If there are enough common words, consider them related
+                return commonWords >= 2;
+            }
+
+            return `
+                <div class="tab-panel active" data-tab="summary">
+                    <div class="summary">
+                        ${formatSummary(analysis.summary) || ''}
+                    </div>
+                </div>
+                <div class="tab-panel" data-tab="insights">
+                    <div class="insights">
+                        ${formatInsights(analysis.insights) || ''}
+                    </div>
+                </div>
+                <div class="tab-panel" data-tab="topics">
+                    <div class="topics">
+                        ${formatTopics(analysis.topics) || ''}
+                    </div>
+                </div>
+                <div class="tab-panel" data-tab="segments">
+                    <div class="segments">
+                        <div class="segments-grid">
+                            ${formatSegments(analysis.timestamps) || ''}
+                        </div>
+                        <div class="segments-player"></div>
+                    </div>
+                </div>
+            `;
+        }
+    </script>
+</body>
+</html>

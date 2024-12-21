@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+python-dotenv
+KalturaApiClient
+boto3
+python-multipart
+jinja2
+lxml
+aiofiles
+instructor
+litellm
+eval_type_backport
+requests
