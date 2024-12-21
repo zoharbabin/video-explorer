@@ -1,6 +1,6 @@
 # Video Explorer
 
-A sophisticated web application that uses Kaltura and AWS Bedrock (Claude 3) to analyze videos and enable interactive conversations with their content. The application provides deep video analysis, topic extraction, and AI-powered chat capabilities.
+A web application that uses Kaltura and AWS Bedrock (Claude 3) to analyze videos and enable interactive conversations with their content. The application provides video analysis, topic extraction, and AI-powered chat capabilities.
 
 ## Features
 
@@ -14,7 +14,6 @@ A sophisticated web application that uses Kaltura and AWS Bedrock (Claude 3) to 
   - Topic extraction and importance scoring
   - Key moment detection with timestamps
   - Comprehensive video summaries
-  - Intelligent segmentation of long videos
 
 - **Interactive Interface**
   - Clean, responsive design using PicoCSS
@@ -29,7 +28,6 @@ A sophisticated web application that uses Kaltura and AWS Bedrock (Claude 3) to 
 - Python 3.9 or higher
 - Kaltura account with API access
 - AWS account with Bedrock access (Claude 3 model)
-- Node.js and npm (for development)
 
 ## Quick Start
 
@@ -94,7 +92,7 @@ PAGE_SIZE=10
 ## Architecture
 
 ### Backend
-- **FastAPI**: Modern, fast web framework for building APIs
+- **Python**: Core application runtime
 - **Kaltura API**: Video content management and delivery
 - **AWS Bedrock**: AI analysis using Claude 3 model
 - **litellm**: LLM integration layer
@@ -132,53 +130,12 @@ python main.py
 ### Code Structure
 ```
 video-explorer/
-├── main.py           # FastAPI application and backend logic
+├── main.py           # Application logic and API endpoints
 ├── static/
 │   └── style.css    # Application styling
 ├── templates/
 │   └── index.html   # Frontend interface
 └── requirements.txt  # Python dependencies
-```
-
-## Deployment
-
-### Deploy to AWS Elastic Beanstalk
-
-1. Install EB CLI:
-```bash
-pip install awsebcli
-```
-
-2. Initialize EB project:
-```bash
-eb init -p python-3.9 video-explorer
-```
-
-3. Create and deploy:
-```bash
-eb create video-explorer-env
-```
-
-### Deploy to Heroku
-
-1. Install Heroku CLI and login:
-```bash
-heroku login
-```
-
-2. Create and deploy:
-```bash
-heroku create video-explorer
-git push heroku main
-```
-
-3. Set environment variables:
-```bash
-heroku config:set KALTURA_PARTNER_ID=your_partner_id
-heroku config:set KALTURA_SECRET=your_secret_key
-heroku config:set AWS_ACCESS_KEY_ID=your_aws_access_key
-heroku config:set AWS_SECRET_ACCESS_KEY=your_aws_secret_key
-heroku config:set AWS_REGION=us-east-1
 ```
 
 ## Browser Support
