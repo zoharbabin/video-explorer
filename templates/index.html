@@ -43,10 +43,15 @@
         <section id="chat-section" style="display: none;">
             <h2>Chat with Videos</h2>
             <div id="chat-messages"></div>
-            <div class="grid">
+            <div class="chat-input-container">
                 <input type="text" id="chat-input" placeholder="Ask a question about the videos...">
                 <button id="chat-btn">Send</button>
             </div>
+            <button class="scroll-bottom-btn" id="scroll-bottom" style="display: none;" aria-label="Scroll to bottom">
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M5 8l5 5 5-5"/>
+                </svg>
+            </button>
         </section>
     </main>
 
@@ -388,7 +393,7 @@
                 const playerUrl = new URL(`${kalturaConfig.baseUrl}/p/${kalturaConfig.partnerId}/embedPlaykitJs/uiconf_id/${kalturaConfig.uiconfId}`);
                 playerUrl.searchParams.set('iframeembed', 'true');
                 playerUrl.searchParams.set('entry_id', videoId);
-                playerUrl.searchParams.set('kalturaStartTime', Math.floor(startTime));
+                playerUrl.searchParams.set('kalturaSeekFrom', Math.floor(startTime));
                 playerUrl.searchParams.set('kalturaClipTo', Math.floor(endTime));
                 playerUrl.searchParams.set('autoPlay', 'true');
 
@@ -433,6 +438,29 @@
             }
         }
 
+        // Handle scroll-to-bottom button visibility
+        const chatMessages = $('#chat-messages');
+        const scrollBottomBtn = $('#scroll-bottom');
+        
+        chatMessages.addEventListener('scroll', () => {
+            const isNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 100;
+            scrollBottomBtn.style.display = isNearBottom ? 'none' : 'flex';
+        });
+        
+        scrollBottomBtn.addEventListener('click', () => {
+            chatMessages.scrollTo({
+                top: chatMessages.scrollHeight,
+                behavior: 'smooth'
+            });
+        });
+
+        function formatTimestamp() {
+            const now = new Date();
+            const hours = now.getHours().toString().padStart(2, '0');
+            const minutes = now.getMinutes().toString().padStart(2, '0');
+            return `${hours}:${minutes}`;
+        }
+
         function appendMessage(sender, message) {
             const messageEl = document.createElement('article');
             messageEl.setAttribute('data-sender', sender);
@@ -471,11 +499,22 @@
                 .replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
 
             messageEl.innerHTML = `
-                <strong>${sender}</strong>
+                <div class="message-header">
+                    <strong>${sender}</strong>
+                    <span class="timestamp">${formatTimestamp()}</span>
+                </div>
                 ${formattedMessage}
             `;
-            $('#chat-messages').appendChild(messageEl);
-            messageEl.scrollIntoView({behavior: 'smooth'});
+            
+            const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 100;
+            chatMessages.appendChild(messageEl);
+            
+            if (wasNearBottom) {
+                messageEl.scrollIntoView({ behavior: 'smooth' });
+                scrollBottomBtn.style.display = 'none';
+            } else {
+                scrollBottomBtn.style.display = 'flex';
+            }
         }
 
         // Utility functions
