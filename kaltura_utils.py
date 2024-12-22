@@ -1,12 +1,8 @@
 import json
 import time
 import logging
-import requests
 from typing import List, Optional, Dict, Tuple
-from logger_config import setup_logging
-
-# Set up logging for this module
-logger = logging.getLogger(__name__)
+import requests
 from KalturaClient import KalturaClient, KalturaConfiguration
 from KalturaClient.Base import IKalturaLogger
 from KalturaClient.exceptions import KalturaClientException, KalturaException
@@ -14,8 +10,7 @@ from KalturaClient.Plugins.Core import (
     KalturaBaseEntryFilter,
     KalturaFilterPager,
     KalturaMediaType,
-    KalturaSessionType,
-    KalturaMediaEntryOrderBy
+    KalturaSessionType
 )
 from KalturaClient.Plugins.Caption import (
     KalturaCaptionAssetFilter,
@@ -41,6 +36,9 @@ from KalturaClient.Plugins.ElasticSearch import (
     KalturaESearchUnifiedItem
 )
 
+# Set up logging for this module
+logger = logging.getLogger(__name__)
+
 class KalturaLogger(IKalturaLogger):
     def __init__(self):
         self.logger = logging.getLogger('KalturaClient')
@@ -65,7 +63,7 @@ class CustomKalturaClient(KalturaClient):
                     raise
                 msg = f"{str(error)}, Kaltura API retrying request in {mdelay} seconds..."
                 context = f'Function "{func.__name__}" failed on attempt {self.max_retries - mtries + 1}'
-                logger.warning(f'Retrying function due to error: {msg} Context: {context}')
+                logger.warning('Retrying function due to error: %s Context: %s', msg, context)
                 time.sleep(mdelay)
                 mtries -= 1
                 mdelay *= self.backoff
@@ -96,6 +94,7 @@ class KalturaUtils:
     def init_session(self) -> Tuple[bool, int]:
         """Initialize Kaltura session and return (success, partner_id)"""
         try:
+            # pylint: disable=no-member
             session = self.client.session.start(
                 self.admin_secret,
                 None,
@@ -104,18 +103,18 @@ class KalturaUtils:
                 self.session_duration,
                 "appid:video-explorer"
             )
-            self.client.setKs(session)
+            self.client.setKs(session) # pylint: disable=no-member
             
             # Verify session with test API call
             test_filter = KalturaBaseEntryFilter()
             test_pager = KalturaFilterPager()
             test_pager.pageSize = 1
-            test_result = self.client.baseEntry.list(test_filter, test_pager)
+            self.client.baseEntry.list(test_filter, test_pager) # pylint: disable=no-member
             
             return True, self.partner_id
             
-        except Exception as e:
-            logger.error(f"Failed to initialize Kaltura session: {e}")
+        except (KalturaClientException, KalturaException) as e:
+            logger.error("Failed to initialize Kaltura session: %s", e)
             return False, -1
 
     def fetch_videos(self, category_ids: Optional[str] = None, free_text: Optional[str] = None, number_of_videos: int = 6) -> List[Dict]:
@@ -164,7 +163,7 @@ class KalturaUtils:
         pager.pageSize = number_of_videos
         pager.pageIndex = 1
 
-        result = self.client.elasticSearch.eSearch.searchEntry(search_params, pager)
+        result = self.client.elasticSearch.eSearch.searchEntry(search_params, pager) # pylint: disable=no-member
 
         videos = []
         for entry in result.objects:
@@ -190,29 +189,47 @@ class KalturaUtils:
         caption_filter.orderBy = KalturaCaptionAssetOrderBy.CREATED_AT_DESC
         pager = KalturaFilterPager()
         
-        result = self.client.caption.captionAsset.list(caption_filter, pager)
+        result = self.client.caption.captionAsset.list(caption_filter, pager) # pylint: disable=no-member
         return [{'id': caption.id, 'label': caption.label, 'language': caption.language} 
                 for caption in result.objects]
 
     def get_json_transcript(self, caption_asset_id: str) -> List[Dict]:
-        """Get transcript in JSON format and chunk it"""
+        """
+        Fetch and chunk a JSON transcript.
+        """
         try:
-            cap_json_url = self.client.caption.captionAsset.serveAsJson(caption_asset_id)
-            response = requests.get(cap_json_url)
+            # Retrieve the URL for the JSON transcript
+            cap_json_url = self.client.caption.captionAsset.serveAsJson(caption_asset_id) # pylint: disable=no-member
+            timeout = (10, 30)  # Timeout: 10 seconds to connect, 30 seconds to read
+            response = requests.get(cap_json_url, timeout=timeout)
             response.raise_for_status()
-            transcript = response.json()['objects']
-            
+
+            # Parse the JSON response
+            json_data = response.json()
+
+            # Extract and validate transcript data
+            transcript = json_data.get('objects', [])
+            if not isinstance(transcript, list):
+                logger.error("Unexpected data format for transcript: %s", type(transcript))
+                return []
+
             return self.chunk_transcript(transcript) if transcript else []
-            
-        except requests.RequestException as e:
-            logger.error(f"Network error getting JSON transcript: {e}")
+
+        except requests.Timeout:
+            logger.error("Request to %s timed out.", cap_json_url)
             return []
-        except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON transcript: {e}")
+        except requests.ConnectionError:
+            logger.error("Connection error occurred while accessing %s.", cap_json_url)
             return []
-        except Exception as e:
-            logger.error(f"Unexpected error getting JSON transcript: {e}")
+        except requests.RequestException as req_error:
+            logger.error("Request failed: %s", req_error)
             return []
+        except json.JSONDecodeError as json_error:
+            logger.error("Error decoding JSON response from %s: %s", cap_json_url, json_error)
+            return []
+        except Exception as unexpected_error:  # Catch unexpected exceptions explicitly
+            logger.error("An unexpected error occurred: %s", unexpected_error)
+            raise  # Re-raise the exception after logging it
 
     def chunk_transcript(self, data: List[Dict], max_chars: int = 150000, overlap: int = 10000) -> List[Dict]:
         """Chunk transcript into segments with overlap"""
