@@ -4,7 +4,7 @@ import json
 import time
 import math
 import asyncio
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -217,25 +217,26 @@ Instructions:
 4. Each key moment should have a short, clear description (10–15 words) that includes at least 4 verbatim words from the original content.
 5. Return your answer as a JSON array of TimestampEntry objects. Each object:
    - start_timestamp (float) -> e.g., 120.5
-   - end_timestamp (float) -> e.g., 150.5
+   - end_timestamp (float) -> e.g., 250.5
    - description (string) -> 10-15 words, referencing key terms from that line
    - topic (string) -> The main topic or idea introduced
    - importance (1-5) -> 5 for major transitions, 3-4 for significant points, etc.
 6. Make sure there are no overlapping timestamps or duplicates.
 7. The list of moments returned should cover the entire segment without gaps in time.
+8. Each topic should be at least 60 seconds long.
 
 Example Output:
 [
   {{
     "start_timestamp": 120.5,
-    "end_timestamp": 134.0,
+    "end_timestamp": 234.0,
     "description": "Demonstrates neural network training interface with sample code",
     "topic": "Neural Network",
     "importance": 5
   }},
   {{
-    "start_timestamp": 134.0,
-    "end_timestamp": 170.0,
+    "start_timestamp": 234.0,
+    "end_timestamp": 370.0,
     "description": "Explains backpropagation algorithm with real-time model updates",
     "topic": "Backpropagation",
     "importance": 4
@@ -495,14 +496,7 @@ Example structure:
     {{"name": "Topic 1", "importance": 4}},
     {{"name": "Topic 2", "importance": 3}}
   ],
-  "timestamps": [
-    {{
-      "timestamp": {chunk_start + 120},
-      "description": "Introduces key concept with clear example",
-      "topic": "Main Topic",
-      "importance": 4
-    }}
-  ]
+  "timestamps": []  # Timestamps will be generated separately
 }}"""
 
                 print(f"Sending chunk {chunk_index + 1} to LLM for analysis...")
@@ -525,7 +519,8 @@ Example structure:
                     insights=[f"Error: {str(e)}"],
                     topics=[{"name": "<ERROR>", "importance": 1}],
                     timestamps=[TimestampEntry(
-                        timestamp=0,
+                        start_timestamp=0,
+                        end_timestamp=0,
                         description="Processing error",
                         topic="Error",
                         importance=1
@@ -545,7 +540,7 @@ Example structure:
                             "summary": "No English captions found for this video.",
                             "insights": ["Video has no English captions available"],
                             "topics": [{"name": "<NO_CAPTIONS>", "importance": 1}],
-                            "timestamps": [{"timestamp": 0, "description": "No captions available", "topic": "Error", "importance": 1}]
+                            "timestamps": [{"start_timestamp": 0, "end_timestamp": 0, "description": "No captions available", "topic": "Error", "importance": 1}]
                         }
                     }
 
@@ -559,7 +554,7 @@ Example structure:
                             "summary": "No readable transcript content found.",
                             "insights": ["Video transcript is empty or unreadable"],
                             "topics": [{"name": "<NO_TRANSCRIPT>", "importance": 1}],
-                            "timestamps": [{"timestamp": 0, "description": "No transcript available", "topic": "Error", "importance": 1}]
+                            "timestamps": [{"start_timestamp": 0, "end_timestamp": 0, "description": "No transcript available", "topic": "Error", "importance": 1}]
                         }
                     }
 
@@ -618,7 +613,7 @@ Example structure:
                         "summary": "Error processing video.",
                         "insights": [f"Processing error: {str(e)}"],
                         "topics": [{"name": "<ERROR>", "importance": 1}],
-                        "timestamps": [{"timestamp": 0, "description": "Processing error", "topic": "Error", "importance": 1}]
+                        "timestamps": [{"start_timestamp": 0, "end_timestamp": 0, "description": "Processing error", "topic": "Error", "importance": 1}]
                     }
                 }
 
@@ -675,14 +670,18 @@ Provide a clear, direct answer based on the video context above. Focus on accura
         print("Sending chat request to LLM...")
         response = await asyncio.to_thread(
             llm_client.chat.completions.create,
-            model=os.getenv('MODEL_ID'),
+            model=os.getenv('MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0'),
             response_model=ChatResponse,
             messages=[{"role": "user", "content": prompt}],
             temperature=MODEL_TEMPERATURE
         )
         
         return {"answer": response.answer}
+    except asyncio.TimeoutError as e:
+        print(f"Timeout error in chat: {e}")
+        return {"error": "Request timed out. Please try again."}
     except Exception as e:
+        print(f"Unexpected error in chat: {e}")
         return {"error": str(e)}
 
 if __name__ == "__main__":

@@ -1,11 +1,9 @@
-import os
 import json
 import time
 import requests
-import traceback
 from typing import List, Optional, Dict, Tuple
 from KalturaClient import KalturaClient, KalturaConfiguration
-from KalturaClient.Base import IKalturaLogger, KalturaParams
+from KalturaClient.Base import IKalturaLogger
 from KalturaClient.exceptions import KalturaClientException, KalturaException
 from KalturaClient.Plugins.Core import (
     KalturaBaseEntryFilter,
@@ -196,11 +194,16 @@ class KalturaUtils:
             response.raise_for_status()
             transcript = response.json()['objects']
             
-            return self.chunk_transcript(transcript)
+            return self.chunk_transcript(transcript) if transcript else []
             
+        except requests.RequestException as e:
+            print(f"Network error getting JSON transcript: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            print(f"Error decoding JSON transcript: {e}")
+            return []
         except Exception as e:
-            print(f"Error getting JSON transcript: {e}")
-            print(traceback.format_exc())
+            print(f"Unexpected error getting JSON transcript: {e}")
             return []
 
     def chunk_transcript(self, data: List[Dict], max_chars: int = 150000, overlap: int = 10000) -> List[Dict]:
