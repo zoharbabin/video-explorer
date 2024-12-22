@@ -60,6 +60,127 @@ body {
     margin-bottom: 1rem;
 }
 
+.header-left {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+}
+
+.view-toggle {
+    display: flex;
+    gap: 0.25rem;
+    background: var(--card-background-color);
+    padding: 0.25rem;
+    border-radius: 6px;
+}
+
+.view-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    margin: 0;
+    border: none;
+    background: none;
+    color: var(--secondary);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.view-btn:hover {
+    background: var(--card-sectionning-background-color);
+    color: var(--primary);
+}
+
+.view-btn.active {
+    background: var(--primary);
+    color: var(--contrast);
+}
+
+#video-list.list-view {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+#video-list.list-view {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    background: hsl(208, 30%, 8%);
+    padding: 1px;
+    border-radius: 6px;
+}
+
+#video-list.list-view article {
+    display: grid;
+    grid-template-columns: 80px 1fr auto;
+    gap: 0.5rem;
+    padding: 0.25rem;
+    align-items: center;
+    min-height: 45px;
+    border-radius: 2px;
+    background: hsl(205, 30%, 15%);
+    margin: 4px;
+}
+
+#video-list.list-view article:hover {
+    background: hsl(205, 30%, 18%);
+}
+
+#video-list.list-view img {
+    width: 80px;
+    height: 45px;
+    margin: 0;
+    border-radius: 3px;
+}
+
+#video-list.list-view .content-wrapper {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.5rem;
+    align-items: center;
+    min-width: 0;
+}
+
+#video-list.list-view .text-content {
+    min-width: 0;
+}
+
+#video-list.list-view h3 {
+    font-size: 0.85rem;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
+}
+
+#video-list.list-view p {
+    font-size: 0.75rem;
+    margin: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--muted-color);
+    line-height: 1.2;
+}
+
+#video-list.list-view small {
+    font-size: 0.7rem;
+    white-space: nowrap;
+    color: var(--primary);
+    opacity: 0.9;
+}
+
+#video-list.list-view article.selected::before {
+    top: 0.5rem;
+    right: 0.5rem;
+}
+
 .selection-info {
     display: flex;
     align-items: center;
