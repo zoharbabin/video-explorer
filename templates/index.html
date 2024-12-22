@@ -378,18 +378,6 @@
                 }
             });
 
-            // Preview clip function
-            window.previewClip = function(startTime, endTime) {
-                const firstVideoEl = document.querySelector('#video-list article.selected');
-                if (!firstVideoEl) return;
-                
-                const videoId = firstVideoEl.dataset.videoId;
-                const playerContainer = document.querySelector('.segments-player');
-                if (!playerContainer) return;
-
-                createVideoPlayer(videoId, startTime, endTime, playerContainer);
-            }
-
             // Function to create and show video player
             function createVideoPlayer(videoId, startTime, endTime, container) {
                 const playerUrl = new URL(`${kalturaConfig.baseUrl}/p/${kalturaConfig.partnerId}/embedPlaykitJs/uiconf_id/${kalturaConfig.uiconfId}`);
@@ -412,36 +400,39 @@
                 container.classList.add('active');
             }
 
-            // Preview clip function
-            function previewClip(startTime, endTime) {
-                const firstVideoEl = document.querySelector('#video-list article.selected');
-                if (!firstVideoEl) return;
-                
-                const videoId = firstVideoEl.dataset.videoId;
-                const playerContainer = document.querySelector('.segments-player');
-                if (!playerContainer) return;
+            // Handle preview button clicks
+            analysisResults.addEventListener('click', (e) => {
+                const previewBtn = e.target.closest('.preview-clip-btn');
+                if (!previewBtn) return;
+
+                const entry = previewBtn.closest('[data-video-id]');
+                if (!entry) return;
+
+                const videoId = entry.dataset.videoId;
+                const startTime = parseFloat(entry.dataset.startTime);
+                const endTime = parseFloat(entry.dataset.endTime);
+                const container = entry.closest('.segments, .social-clips');
+                const playerContainer = container.querySelector('.segments-player');
 
                 createVideoPlayer(videoId, startTime, endTime, playerContainer);
-            }
+            });
 
-            // Handle segment clicks and video player
+            // Handle segment entry clicks
             analysisResults.addEventListener('click', (e) => {
-                const segmentEntry = e.target.closest('.segment-entry');
+                const segmentEntry = e.target.closest('.segments .segment-entry');
                 if (!segmentEntry) return;
 
-                // Update active state
                 if (activeSegment) {
                     activeSegment.classList.remove('active');
                 }
                 segmentEntry.classList.add('active');
                 activeSegment = segmentEntry;
 
-                // Get segment data and create player
                 const videoId = segmentEntry.dataset.videoId;
                 const startTime = parseFloat(segmentEntry.dataset.startTime);
                 const endTime = parseFloat(segmentEntry.dataset.endTime);
                 const playerContainer = segmentEntry.closest('.segments').querySelector('.segments-player');
-                
+
                 createVideoPlayer(videoId, startTime, endTime, playerContainer);
             });
 
@@ -723,20 +714,24 @@
                     </div>`;
                 }
 
+                const firstVideoEl = document.querySelector('#video-list article.selected');
+                if (!firstVideoEl) return '';
+                const videoId = firstVideoEl.dataset.videoId;
+
                 return clips.map(clip => {
                     const startTime = formatDuration(clip.start_time);
                     const endTime = formatDuration(clip.end_time);
                     const platformClass = clip.platform.toLowerCase();
                     
                     return `
-                        <div class="social-clip-card" data-start-time="${clip.start_time}" data-end-time="${clip.end_time}">
+                        <div class="social-clip-card" data-start-time="${clip.start_time}" data-end-time="${clip.end_time}" data-video-id="${videoId}">
                             <div class="platform-badge ${platformClass}">${clip.platform}</div>
                             <div class="clip-time">${startTime} - ${endTime}</div>
                             <div class="clip-content">
                                 <div class="clip-description">${clip.description}</div>
                                 <div class="clip-hashtags">${clip.hashtags}</div>
                             </div>
-                            <button class="preview-clip-btn" onclick="previewClip(${clip.start_time}, ${clip.end_time})">
+                            <button class="preview-clip-btn">
                                 Preview Clip
                             </button>
                         </div>
@@ -770,7 +765,10 @@
                 </div>
                 <div class="tab-panel" data-tab="social-clips">
                     <div class="social-clips">
-                        ${formatSocialClips(analysis.social_clips) || ''}
+                        <div class="clips-grid">
+                            ${formatSocialClips(analysis.social_clips) || ''}
+                        </div>
+                        <div class="segments-player"></div>
                     </div>
                 </div>
             `;
