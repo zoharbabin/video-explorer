@@ -385,9 +385,8 @@
 
                 // Get segment data
                 const videoId = segmentEntry.dataset.videoId;
-                const startTime = parseFloat(segmentEntry.dataset.time);
-                const duration = parseFloat(segmentEntry.dataset.duration) || 300;
-                const endTime = startTime + duration;
+                const startTime = parseFloat(segmentEntry.dataset.startTime);
+                const endTime = parseFloat(segmentEntry.dataset.endTime);
 
                 // Create player iframe
                 const playerUrl = new URL(`${kalturaConfig.baseUrl}/p/${kalturaConfig.partnerId}/embedPlaykitJs/uiconf_id/${kalturaConfig.uiconfId}`);
@@ -640,23 +639,24 @@
 
                 return groupedSegments.map(group => {
                     const mainSegment = group[0];
-                    const time = parseFloat(mainSegment.timestamp).toFixed(2);
-                    const thumbnailUrl = `https://cfvod.kaltura.com/p/2748741/sp/274874100/thumbnail/entry_id/${videoId}/width/160/type/2/bgcolor/000000/quality/85/vid_sec/${time}`;
+                    const startTime = parseFloat(mainSegment.start_timestamp).toFixed(2);
+                    const endTime = parseFloat(mainSegment.end_timestamp).toFixed(2);
+                    const thumbnailUrl = `https://cfvod.kaltura.com/p/2748741/sp/274874100/thumbnail/entry_id/${videoId}/width/160/type/2/bgcolor/000000/quality/85/vid_sec/${startTime}`;
                     
                     // Combine descriptions if there are multiple segments in the group
                     const description = group.length > 1
                         ? group.map(ts => ts.description).join(' | ')
                         : mainSegment.description;
                     
-                    return `<div class="segment-entry" data-time="${time}" data-video-id="${videoId}" data-duration="300">
+                    return `<div class="segment-entry" data-start-time="${startTime}" data-end-time="${endTime}" data-video-id="${videoId}">
                         <div class="segment-thumbnail">
-                            <img src="${thumbnailUrl}" alt="Thumbnail at ${time}s">
+                            <img src="${thumbnailUrl}" alt="Thumbnail at ${startTime}s">
                         </div>
                         <div class="segment-content">
                             <h4 class="segment-title">${description.split('.')[0]}.</h4>
                             <div class="segment-desc">${description.split('.').slice(1).join('.')}</div>
                         </div>
-                        <div class="segment-time">${formatDuration(time)}</div>
+                        <div class="segment-time">${formatDuration(startTime)} - ${formatDuration(endTime)}</div>
                     </div>`;
                 }).join('');
             };

@@ -2,10 +2,9 @@
 import os
 import json
 import time
+import math
 import asyncio
-import aiohttp
-import re
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,15 +14,7 @@ from dotenv import load_dotenv
 import instructor
 from litellm import completion
 from pydantic import BaseModel, Field
-from KalturaClient import *
-from KalturaClient.Plugins.Core import (
-    KalturaSessionType,
-    KalturaMediaEntryFilter,
-    KalturaMediaType,
-    KalturaFilterPager,
-    KalturaMediaEntryOrderBy
-)
-from KalturaClient.Plugins.Caption import KalturaCaptionAssetFilter
+from kaltura_utils import KalturaUtils
 
 # Load environment variables
 load_dotenv()
@@ -60,18 +51,6 @@ app.add_middleware(
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
-# Initialize Kaltura configuration
-config = KalturaConfiguration()
-config.serviceUrl = os.getenv('KALTURA_SERVICE_URL', 'https://cdnapisec.kaltura.com')  # Use secure API endpoint
-print(f"Initializing Kaltura client with service URL: {config.serviceUrl}")  # Debug log
-client = KalturaClient(config)
-
-# Initialize instructor client with litellm
-llm_client = instructor.from_litellm(completion)
-
-# Configure litellm to use Bedrock
-os.environ["AWS_REGION"] = os.getenv('AWS_REGION', 'us-east-1')
-
 # Load configuration values
 KALTURA_SESSION_DURATION = int(os.getenv('KALTURA_SESSION_DURATION', 86400))  # 24 hours
 PAGE_SIZE = int(os.getenv('PAGE_SIZE', 10))
@@ -80,9 +59,24 @@ MODEL_MAX_TOKENS = int(os.getenv('MODEL_MAX_TOKENS', 4000))
 MODEL_CHUNK_SIZE = int(os.getenv('MODEL_CHUNK_SIZE', 24000))  # Doubled chunk size for fewer API calls
 MODEL_TEMPERATURE = float(os.getenv('MODEL_TEMPERATURE', 0))
 
+# Initialize Kaltura client
+kaltura = KalturaUtils(
+    service_url=os.getenv('KALTURA_SERVICE_URL', 'https://cdnapisec.kaltura.com'),
+    partner_id=int(os.getenv('KALTURA_PARTNER_ID')),
+    admin_secret=os.getenv('KALTURA_SECRET'),
+    session_duration=KALTURA_SESSION_DURATION
+)
+
+# Initialize instructor client with litellm
+llm_client = instructor.from_litellm(completion)
+
+# Configure litellm to use Bedrock
+os.environ["AWS_REGION"] = os.getenv('AWS_REGION', 'us-east-1')
+
 # Define Pydantic models for structured outputs
 class TimestampEntry(BaseModel):
-    timestamp: float = Field(description="Timestamp in seconds")
+    start_timestamp: float = Field(description="Timestamp in seconds")
+    end_timestamp: float = Field(description="Timestamp in seconds")
     description: str = Field(description="Description of what occurs at this timestamp")
     topic: str = Field(description="Main topic being discussed at this timestamp")
     importance: int = Field(description="Importance level (1-5)", ge=1, le=5)
@@ -98,48 +92,12 @@ class ChatResponse(BaseModel):
 
 def init_kaltura_session():
     """Initialize Kaltura session"""
-    try:
-        partner_id = int(os.getenv('KALTURA_PARTNER_ID'))
-        secret = os.getenv('KALTURA_SECRET')
-        
-        print(f"Attempting to initialize Kaltura session with partner ID: {partner_id}")  # Debug log
-        
-        if not partner_id or not secret:
-            print("Missing Kaltura credentials in environment variables")
-            return False
-            
-        try:
-            session = client.session.start(
-                secret,
-                None,
-                KalturaSessionType.ADMIN,
-                partner_id,
-                KALTURA_SESSION_DURATION,
-                "appid:video-explorer"
-            )
-            print(f"Session created successfully: {session[:30]}...")  # Debug log (show first 30 chars of session)
-            client.setKs(session)
-            
-            # Verify session by making a test API call
-            try:
-                test_filter = KalturaMediaEntryFilter()
-                test_filter.mediaTypeEqual = KalturaMediaType.VIDEO
-                test_pager = KalturaFilterPager()
-                test_pager.pageSize = 1
-                test_result = client.media.list(test_filter, test_pager)
-                print(f"Test API call successful. Total count: {test_result.totalCount}")  # Debug log
-                return True
-            except Exception as api_error:
-                print(f"Session created but test API call failed: {api_error}")
-                return False
-                
-        except Exception as session_error:
-            print(f"Failed to create Kaltura session: {session_error}")
-            return False
-            
-    except Exception as e:
-        print(f"Failed to initialize Kaltura session: {e}")
+    success, pid = kaltura.init_session()
+    if not success:
+        print("Failed to initialize Kaltura session")
         return False
+    print(f"Successfully initialized Kaltura session for partner ID: {pid}")
+    return True
 
 @app.get("/", response_class=HTMLResponse)
 async def home(request: Request):
@@ -153,162 +111,277 @@ async def home(request: Request):
 async def search_videos(category_id: Optional[str] = None, query: Optional[str] = None):
     """Search for videos with English captions"""
     try:
-        print("Initializing Kaltura session...")  # Debug log
+        print("Initializing Kaltura session...")
         if not init_kaltura_session():
             return {"error": "Failed to initialize Kaltura session. Please check your credentials."}
         
-        print("Session initialized successfully")  # Debug log
-            
-        # Create filter for video search
-        filter = KalturaMediaEntryFilter()
-        filter.mediaTypeEqual = KalturaMediaType.VIDEO
+        print("Session initialized successfully")
         
-        if category_id:
-            filter.categoryAncestorIdIn = category_id
-        if query:
-            filter.freeText = query
-        else:
-            # When no search parameters are provided, sort by creation date (newest first)
-            filter.orderBy = KalturaMediaEntryOrderBy.CREATED_AT_DESC
-            
-        # Get videos with captions
-        pager = KalturaFilterPager()
-        pager.pageSize = PAGE_SIZE
-        videos = []
+        # Use the new fetch_videos method that ensures videos have captions
+        videos = kaltura.fetch_videos(
+            category_ids=category_id,
+            free_text=query,
+            number_of_videos=PAGE_SIZE
+        )
         
-        try:
-            print("Executing Kaltura media.list API call...")  # Debug log
-            result = client.media.list(filter, pager)
-            print(f"Found {result.totalCount} total videos")  # Debug log
-            
-            if not result.objects:
-                print("No videos returned from the API")  # Debug log
-                return {"videos": []}
-        except Exception as api_error:
-            print(f"Error executing media.list API call: {api_error}")  # Debug log
-            return {"error": f"Failed to fetch videos: {str(api_error)}"}
-            
-        for entry in result.objects:
-            # Include all videos for now, without caption check
-            videos.append({
-                "id": entry.id,
-                "name": entry.name,
-                "description": entry.description,
-                "duration": entry.duration,
-                "thumbnail_url": entry.thumbnailUrl
-            })
-            print(f"Added video: {entry.name}")  # Debug log
-                
+        print(f"Found {len(videos)} videos with captions")
         return {"videos": videos}
+        
     except Exception as e:
+        print(f"Error in search_videos: {str(e)}")
         return {"error": str(e)}
 
-def parse_srt_timestamp(timestamp_str: str) -> float:
-    """Convert SRT timestamp to seconds"""
-    # Remove milliseconds if present
-    if ',' in timestamp_str:
-        timestamp_str = timestamp_str.split(',')[0]
+
+async def process_transcript_segment(
+    segment_chunks: List[dict],
+    all_chunks: List[dict],
+    segment_index: int,
+    total_segments: int,
+    video_duration: float
+) -> List[TimestampEntry]:
+    """
+    Analyzes a segment of the video's transcript and extracts key topical moments with timestamps,
+    each with a short description, topic, and importance score.
     
-    # Parse HH:MM:SS format
+    Inputs:
+        segment_chunks: A list of chunks (lists of caption entries) that make up this segment.
+        all_chunks:     The entire transcript (unused here beyond signature compatibility).
+        segment_index:  Index of this segment in the overall segmentation.
+        total_segments: Total number of segments in the transcript.
+        video_duration: Duration of the video in seconds.
+    
+    Returns:
+        A list of TimestampEntry objects representing key moments:
+            [
+              {
+                "start_timestamp": 120.5,
+                "end_timestamp": 134.0,
+                "description": "Demonstrates neural network training interface",
+                "topic": "Neural Network",
+                "importance": 5
+              },
+              ...
+            ]
+    """
+
     try:
-        h, m, s = map(int, timestamp_str.split(':'))
-        return h * 3600 + m * 60 + s
-    except:
-        return 0.0
+        print(f"\n[DEBUG] Processing segment {segment_index + 1}/{total_segments}")
+        print(f"[DEBUG] Input chunks: {len(segment_chunks)} chunks with {sum(len(chunk) for chunk in segment_chunks)} total entries")
+        
+        # --------------------------------------------------------------------
+        # 1. Determine start/end times of this segment
+        # --------------------------------------------------------------------
+        segment_start = round(segment_chunks[0][0]['startTime'] / 1000, 2)
+        segment_end   = round(segment_chunks[-1][-1]['endTime'] / 1000, 2)
 
-def parse_captions_with_timestamps(srt_content: str) -> List[dict]:
-    """Parse SRT content into a list of caption entries with timestamps"""
-    entries = []
-    current_entry = {}
-    
-    # Split content into blocks (separated by double newline)
-    blocks = srt_content.strip().split('\n\n')
-    
-    for block in blocks:
-        lines = block.strip().split('\n')
-        if len(lines) >= 3:  # Valid SRT block should have at least 3 lines
-            try:
-                # Parse timestamp line (second line)
-                timestamps = lines[1].split(' --> ')
-                if len(timestamps) == 2:
-                    start_time = parse_srt_timestamp(timestamps[0].strip())
-                    end_time = parse_srt_timestamp(timestamps[1].strip())
-                    
-                    # Get text (remaining lines)
-                    text = ' '.join(lines[2:]).strip()
-                    
-                    entries.append({
-                        "start": start_time,
-                        "end": end_time,
-                        "text": text
-                    })
-            except Exception as e:
-                print(f"Error parsing caption block: {e}")
+        # If the segment is extremely short, we can process anyway,
+        # but optionally warn (instead of skipping).
+        segment_length = segment_end - segment_start
+        print(f"[DEBUG] Segment timing: {segment_start:.1f}s -> {segment_end:.1f}s (duration: {segment_length:.1f}s)")
+        if segment_length < 15:
+            print(f"[DEBUG] Warning: Very short segment (only {segment_length:.2f} seconds).")
+
+        # --------------------------------------------------------------------
+        # 2. Build a line-by-line transcript with exact timestamps
+        #    e.g. "[120.5s - 125.0s] Let me demonstrate the cloud system."
+        # --------------------------------------------------------------------
+        timestamped_lines = []
+        for chunk in segment_chunks:
+            for entry in chunk:
+                start_time_s = round(entry['startTime'] / 1000, 2)
+                end_time_s   = round(entry['endTime']   / 1000, 2)
+                line_text    = entry['text']
+                timestamped_lines.append(f"[{start_time_s:.1f}s - {end_time_s:.1f}s] {line_text}")
+
+        # Combine into one string for the prompt
+        segment_text = "\n".join(timestamped_lines)
+
+        # --------------------------------------------------------------------
+        # 3. Prompt the LLM to analyze the segment and provide key moments
+        # --------------------------------------------------------------------
+        # We keep the instructions short but clear. The model is told:
+        # - Use only the provided timestamps
+        # - Identify major transitions or demos
+        # - Provide 2-3 key moments, with short, specific descriptions
+        # - (Optional) mention spacing, but not too rigid
+        prompt = f"""
+You have a video segment (Part {segment_index + 1} of {total_segments}), from {segment_start:.1f}s to {segment_end:.1f}s.
+
+TRANSCRIPT (with exact timestamps for each line):
+{segment_text}
+
+Instructions:
+1. Identify key moments in this segment where primary discussed topics begin and ends.
+2. Use the start time from the first line that introduces this topic (e.g., '[120.5s - 134.0s] XXX' -> 120.5).
+3. Use the end time from the last line that discusses this topic (e.g., '[120.5s - 134.0s] XXX' -> 134.0).
+4. Each key moment should have a short, clear description (10–15 words) that includes at least 4 verbatim words from the original content.
+5. Return your answer as a JSON array of TimestampEntry objects. Each object:
+   - start_timestamp (float) -> e.g., 120.5
+   - end_timestamp (float) -> e.g., 150.5
+   - description (string) -> 10-15 words, referencing key terms from that line
+   - topic (string) -> The main topic or idea introduced
+   - importance (1-5) -> 5 for major transitions, 3-4 for significant points, etc.
+6. Make sure there are no overlapping timestamps or duplicates.
+7. The list of moments returned should cover the entire segment without gaps in time.
+
+Example Output:
+[
+  {{
+    "start_timestamp": 120.5,
+    "end_timestamp": 134.0,
+    "description": "Demonstrates neural network training interface with sample code",
+    "topic": "Neural Network",
+    "importance": 5
+  }},
+  {{
+    "start_timestamp": 134.0,
+    "end_timestamp": 170.0,
+    "description": "Explains backpropagation algorithm with real-time model updates",
+    "topic": "Backpropagation",
+    "importance": 4
+  }}
+]
+"""
+
+        # --------------------------------------------------------------------
+        # 4. Call the LLM
+        # --------------------------------------------------------------------
+        print(f"[DEBUG] Calling LLM for segment analysis...")
+        segment_timestamps = await asyncio.to_thread(
+            llm_client.chat.completions.create,
+            model=os.getenv('MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0'),
+            response_model=List[TimestampEntry],
+            messages=[{"role": "user", "content": prompt}],
+            timeout=MODEL_TIMEOUT,
+            max_tokens=MODEL_MAX_TOKENS,
+            temperature=MODEL_TEMPERATURE
+        )
+        print(f"[DEBUG] LLM returned {len(segment_timestamps)} timestamps")
+
+        # --------------------------------------------------------------------
+        # 5. Validate the LLM's Results
+        # --------------------------------------------------------------------
+        print(f"[DEBUG] Starting validation of {len(segment_timestamps)} timestamps")
+        valid_results = []
+        used_timestamps = set()
+
+        for ts in segment_timestamps:
+            print(f"\n[DEBUG] Validating timestamp: {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
+            print(f"[DEBUG] Description: {ts.description}")
+            print(f"[DEBUG] Topic: {ts.topic}")
+            print(f"[DEBUG] Importance: {ts.importance}")
+            
+            # Ensure timestamps are within segment range AND video duration
+            if ts.start_timestamp < (segment_start - 0.1):
+                print(f"[DEBUG] ❌ Start timestamp {ts.start_timestamp:.1f}s before segment start [{segment_start:.1f}s]")
                 continue
-    
-    return entries
+            if ts.end_timestamp > (segment_end + 0.1):
+                print(f"[DEBUG] ❌ End timestamp {ts.end_timestamp:.1f}s after segment end [{segment_end:.1f}s]")
+                continue
+            if ts.end_timestamp > (video_duration + 0.1):
+                print(f"[DEBUG] ❌ End timestamp {ts.end_timestamp:.1f}s exceeds video duration {video_duration:.1f}s")
+                continue
+            if ts.start_timestamp >= ts.end_timestamp:
+                print(f"[DEBUG] ❌ Start timestamp {ts.start_timestamp:.1f}s not before end timestamp {ts.end_timestamp:.1f}s")
+                continue
 
-def split_transcript_by_time(
-    caption_entries: List[dict],
-    chunk_size_seconds: int = 600  # 10 minutes
-) -> List[dict]:
-    """
-    Splits the transcript into time-based chunks of chunk_size_seconds.
-    Each chunk contains concatenated text from all captions that fall within
-    that time range.
-    """
-    if not caption_entries:
+            # If we've already used this exact timestamp pair, skip
+            timestamp_pair = (ts.start_timestamp, ts.end_timestamp)
+            if timestamp_pair in used_timestamps:
+                print(f"[DEBUG] ❌ Duplicate timestamp pair {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
+                continue
+
+            # Good enough to accept
+            print(f"[DEBUG] ✓ Accepted timestamp pair {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
+            used_timestamps.add(timestamp_pair)
+            valid_results.append(ts)
+
+        print(f"\n[DEBUG] Final validation results:")
+        print(f"[DEBUG] - Input timestamps: {len(segment_timestamps)}")
+        print(f"[DEBUG] - Valid timestamps: {len(valid_results)}")
+        print(f"[DEBUG] - Rejected timestamps: {len(segment_timestamps) - len(valid_results)}")
+        
+        # Return the final, validated timestamps
+        return valid_results
+
+    except Exception as e:
+        print(f"\n[DEBUG] ❌ ERROR processing segment {segment_index + 1}:")
+        print(f"[DEBUG] Error type: {type(e).__name__}")
+        print(f"[DEBUG] Error message: {str(e)}")
+        print(f"[DEBUG] Segment details:")
+        print(f"[DEBUG] - Start time: {segment_start:.1f}s")
+        print(f"[DEBUG] - End time: {segment_end:.1f}s")
+        print(f"[DEBUG] - Duration: {segment_length:.1f}s")
+        print(f"[DEBUG] - Number of chunks: {len(segment_chunks)}")
+        print(f"[DEBUG] - Total entries: {sum(len(chunk) for chunk in segment_chunks)}")
         return []
+
+async def generate_timestamps(transcript_chunks: List[dict], video_duration: float) -> List[TimestampEntry]:
+    """Generate timestamps by analyzing the transcript in manageable segments"""
+    try:
+        # Calculate optimal segment size based on transcript length
+        total_text_length = sum(len(entry['text']) for chunk in transcript_chunks for entry in chunk)
+        # Aim for segments of ~8000 characters to stay well within context limits
+        chars_per_segment = 8000
+        chunks_per_segment = max(1, int((chars_per_segment * len(transcript_chunks)) / total_text_length))
         
-    chunks = []
-    current_chunk_start = 0
-    current_chunk_end = chunk_size_seconds
-    current_text = []
-    
-    # Sort entries by start time to ensure chronological processing
-    sorted_entries = sorted(caption_entries, key=lambda x: x["start"])
-    
-    for entry in sorted_entries:
-        entry_start = entry["start"]
-        entry_end = entry["end"]
+        # Process transcript in segments
+        all_timestamps = []
+        segment_count = math.ceil(len(transcript_chunks) / chunks_per_segment)
         
-        # If the entry is entirely before current_chunk_end, add its text
-        if entry_end <= current_chunk_end:
-            current_text.append(entry["text"])
-        else:
-            # We've reached the end of the current chunk. Save it if it has content.
-            if current_text:
-                chunk = {
-                    "start": current_chunk_start,
-                    "end": current_chunk_end,
-                    "text": "\n".join(current_text).strip()
-                }
-                chunks.append(chunk)
+        # Create segment processing tasks
+        segment_tasks = []
+        for segment_index in range(segment_count):
+            start_idx = segment_index * chunks_per_segment
+            end_idx = min(start_idx + chunks_per_segment, len(transcript_chunks))
+            segment_chunks = transcript_chunks[start_idx:end_idx]
             
-            # Move to the next chunk boundary until this entry fits
-            while entry_start >= current_chunk_end:
-                current_chunk_start = current_chunk_end
-                current_chunk_end += chunk_size_seconds
-            
-            # Start the next chunk with this entry
-            current_text = [entry["text"]]
-    
-    # Add the final chunk if there's any leftover text
-    if current_text:
-        chunk = {
-            "start": current_chunk_start,
-            "end": current_chunk_end,
-            "text": "\n".join(current_text).strip()
-        }
-        chunks.append(chunk)
-    
-    return chunks
+            task = process_transcript_segment(
+                segment_chunks,
+                transcript_chunks,  # Pass full transcript for context
+                segment_index,
+                segment_count,
+                video_duration
+            )
+            segment_tasks.append(task)
+        
+        # Process segments in parallel
+        print(f"Processing {len(segment_tasks)} transcript segments for timestamps...")
+        segment_results = await asyncio.gather(*segment_tasks)
+        
+        # Combine all timestamps
+        all_timestamps = [ts for result in segment_results for ts in result]
+        
+        # Sort and filter timestamps with minimum spacing
+        filtered_timestamps = []
+        min_gap = 90  # 1.5 minutes minimum gap
+        
+        for ts in sorted(all_timestamps, key=lambda x: x.start_timestamp):
+            # Validate timestamps are within video duration
+            if ts.end_timestamp > video_duration:
+                continue
+                
+            # Check spacing
+            if not filtered_timestamps:
+                filtered_timestamps.append(ts)
+            elif (ts.start_timestamp - filtered_timestamps[-1].end_timestamp) >= min_gap:
+                filtered_timestamps.append(ts)
+        
+        # Ensure reasonable coverage
+        target_count = int(video_duration / 180)  # Aim for one timestamp every ~3 minutes
+        if len(filtered_timestamps) < target_count * 0.7:  # If we have less than 70% of target
+            print(f"Warning: Generated only {len(filtered_timestamps)} timestamps for {video_duration/60:.1f} minute video")
+        
+        return filtered_timestamps
+
+    except Exception as e:
+        print(f"Error generating timestamps: {str(e)}")
+        return []
 
 def finalize_segments(chunk_results: List[VideoAnalysis], video_duration: float) -> dict:
     """
-    Combine chunk results into a final analysis with well-spaced key moments
+    Combine chunk results into a final analysis
     """
-    all_key_moments = []
     combined_summaries = []
     all_insights = []
     all_topics = []
@@ -317,36 +390,6 @@ def finalize_segments(chunk_results: List[VideoAnalysis], video_duration: float)
         combined_summaries.append(chunk.summary)
         all_insights.extend(chunk.insights)
         all_topics.extend(chunk.topics)
-        # Filter out any timestamps that exceed video duration
-        valid_timestamps = [
-            ts for ts in chunk.timestamps
-            if ts.timestamp <= video_duration
-        ]
-        all_key_moments.extend(valid_timestamps)
-    
-    # Sort by time
-    all_key_moments.sort(key=lambda m: m.timestamp)
-    
-    # Simple dedup/spacing filter
-    filtered_moments = []
-    min_gap = 60  # 1 minute minimum gap
-    
-    for m in all_key_moments:
-        # Double check timestamp is within video duration
-        if m.timestamp > video_duration:
-            continue
-            
-        if not filtered_moments:
-            filtered_moments.append(m)
-        else:
-            if (m.timestamp - filtered_moments[-1].timestamp) >= min_gap:
-                filtered_moments.append(m)
-    
-    # Ensure coverage near the end
-    if filtered_moments and (video_duration - filtered_moments[-1].timestamp > 600):
-        # If the last key moment is more than 10 minutes from the end,
-        # we might want to add a final marker or rely on the last chunk
-        pass
     
     # Deduplicate insights and topics
     unique_insights = list(dict.fromkeys(all_insights))
@@ -367,7 +410,7 @@ def finalize_segments(chunk_results: List[VideoAnalysis], video_duration: float)
         "summary": "\n\n".join(combined_summaries),
         "insights": unique_insights,
         "topics": final_topics,
-        "timestamps": filtered_moments
+        "timestamps": []  # Will be populated separately
     }
 
 @app.get("/api/analysis-progress/{task_id}")
@@ -408,37 +451,41 @@ async def analyze_videos(video_ids: List[str], background_tasks: BackgroundTasks
         async def process_chunk(chunk: dict, chunk_index: int, total_chunks: int, video_duration: float) -> VideoAnalysis:
             """Process a single chunk of transcript"""
             try:
-                chunk_text = chunk["text"]
-                chunk_start = chunk["start"]
-                chunk_end = chunk["end"]
+                # Format transcript with timestamps
+                timestamped_lines = []
+                chunk_text = []
+                for entry in chunk['entries']:
+                    start_time = entry['startTime'] / 1000  # Convert to seconds
+                    end_time = entry['endTime'] / 1000
+                    timestamped_lines.append(f"[{start_time:.1f}s - {end_time:.1f}s] {entry['text']}")
+                    chunk_text.append(entry['text'])
+
+                chunk_start = chunk['start']
+                chunk_end = chunk['end']
                 
-                print(f"Processing chunk {chunk_index + 1}/{total_chunks} ({len(chunk_text)} characters)")
+                print(f"Processing chunk {chunk_index + 1}/{total_chunks} ({len(''.join(chunk_text))} characters)")
                 
-                prompt = f"""Analyze this video transcript section ({chunk_index + 1} of {total_chunks}), covering time range {chunk_start}-{chunk_end} seconds. The total video duration is {video_duration} seconds.
+                prompt = f"""Analyze this video transcript section ({chunk_index + 1} of {total_chunks}), covering time range {chunk_start}-{chunk_end} seconds.
                 
                 Transcript:
-                {chunk_text}
+                Each line below includes its exact start and end timestamps:
+                {chr(10).join(timestamped_lines)}
                 
-                Instructions:
-                1. Provide a well-structured summary using proper markdown formatting:
+                Instructions for Analysis:
+                1. Provide a well-structured summary using markdown formatting:
                    - Use # for main headings
                    - Use ## for subheadings
                    - Use bullet points (•) for lists
                    - Use proper paragraphs with line breaks
                    - Highlight key terms in **bold**
-                2. Identify up to 2 truly significant moments with timestamps.
-                3. Only include major transitions or critical insights. Do not list minor events.
-                4. IMPORTANT: All timestamps must be less than or equal to {video_duration} seconds.
+                2. Focus on the core content and main ideas
+                3. Identify overarching themes and concepts
                 
                 Format your response as a VideoAnalysis object with:
                 - summary: A well-formatted summary using markdown syntax for structure
                 - insights: List of key takeaways (each prefixed with •)
                 - topics: List of main topics with importance scores (1-5)
-                - timestamps: List of TimestampEntry objects, each with:
-                  - timestamp: Time in seconds (between {chunk_start} and {chunk_end})
-                  - description: Short description (8-15 words)
-                  - topic: Main topic being discussed
-                  - importance: Score from 1-5 (5 for pivotal moments)
+                - timestamps: [] (leave empty as timestamps will be generated separately)
 
 Example structure:
 {{
@@ -489,31 +536,23 @@ Example structure:
         async def process_video(video_id: str, task_id: str, total_videos: int) -> dict:
             """Process a single video with parallel chunk processing"""
             try:
-                caption_filter = KalturaCaptionAssetFilter()
-                caption_filter.entryIdEqual = video_id
-                caption_filter.languageEqual = "en"
-                captions = client.caption.captionAsset.list(caption_filter, KalturaFilterPager()).objects
-
+                # Get English captions
+                captions = kaltura.get_english_captions(video_id)
                 if not captions:
                     return {
                         "video_id": video_id,
                         "analysis": {
-                            "summary": "No captions found for this video.",
+                            "summary": "No English captions found for this video.",
                             "insights": ["Video has no English captions available"],
                             "topics": [{"name": "<NO_CAPTIONS>", "importance": 1}],
                             "timestamps": [{"timestamp": 0, "description": "No captions available", "topic": "Error", "importance": 1}]
                         }
                     }
 
-                caption_url = client.caption.captionAsset.getUrl(captions[0].id)
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(caption_url) as response:
-                        caption_content = await response.text()
-
-                cleaned_content = caption_content.replace('\x00', '').strip()
-                cleaned_content = ''.join(char if ord(char) < 65536 else ' ' for char in cleaned_content)
-
-                if not cleaned_content:
+                # Get JSON transcript and chunk it
+                print(f"Getting JSON transcript for video {video_id}...")
+                transcript_chunks = kaltura.get_json_transcript(captions[0]['id'])
+                if not transcript_chunks:
                     return {
                         "video_id": video_id,
                         "analysis": {
@@ -524,30 +563,37 @@ Example structure:
                         }
                     }
 
-                # Parse captions and split into time-based chunks
-                print(f"Parsing captions for video {video_id}...")
-                caption_entries = parse_captions_with_timestamps(cleaned_content)
-                print(f"Found {len(caption_entries)} caption entries")
+                print(f"Got {len(transcript_chunks)} transcript chunks")
                 
                 # Get video duration from Kaltura
-                video_info = client.media.get(video_id)
+                video_info = kaltura.client.media.get(video_id)
                 video_duration = float(video_info.duration)
                 
-                # Calculate optimal chunk size based on video duration
-                chunk_size = min(600, max(300, video_duration / 8))  # Between 5-10 minutes
-                print(f"Using chunk size of {chunk_size} seconds for {video_duration} second video")
-                
-                time_chunks = split_transcript_by_time(caption_entries, chunk_size_seconds=int(chunk_size))
-                print(f"Split into {len(time_chunks)} time-based chunks")
-                
                 # Process chunks in parallel
-                chunk_tasks = [process_chunk(chunk, i, len(time_chunks), video_duration) for i, chunk in enumerate(time_chunks)]
+                chunk_tasks = []
+                for i, chunk in enumerate(transcript_chunks):
+                    # Preserve individual entries with their timestamps
+                    chunk_data = {
+                        "entries": chunk,  # Original entries with timestamps
+                        "start": chunk[0]['startTime'] / 1000,  # Convert ms to seconds
+                        "end": chunk[-1]['endTime'] / 1000  # Convert ms to seconds
+                    }
+                    chunk_tasks.append(process_chunk(chunk_data, i, len(transcript_chunks), video_duration))
+
                 print(f"Starting parallel analysis of {len(chunk_tasks)} chunks...")
                 chunk_analyses = await asyncio.gather(*chunk_tasks)
 
-                # Combine analyses with simplified approach
+                # Generate timestamps from full transcript
+                print("Generating timestamps from full transcript...")
+                timestamps = await generate_timestamps(transcript_chunks, video_duration)
+                print(f"Generated {len(timestamps)} timestamps")
+
+                # Combine analyses
                 print(f"Combining analyses from {len(chunk_analyses)} chunks...")
                 final_analysis = finalize_segments(chunk_analyses, video_duration)
+                
+                # Add timestamps to final analysis
+                final_analysis["timestamps"] = timestamps
                 
                 result = {
                     "video_id": video_id,
