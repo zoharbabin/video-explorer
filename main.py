@@ -3,17 +3,18 @@ import json
 import time
 import asyncio
 import logging
-from logger_config import setup_logging
 from typing import List, Optional, Dict
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.middleware.cors import CORSMiddleware
-from dotenv import load_dotenv
-import instructor
-from litellm import completion
+from KalturaClient.exceptions import KalturaException
 from pydantic import BaseModel, Field
+import instructor
+from dotenv import load_dotenv
+from litellm import completion
+from logger_config import setup_logging
 from kaltura_utils import KalturaUtils
 
 # Set up logging configuration
@@ -55,12 +56,12 @@ app.mount("/static", StaticFiles(directory=static_dir), name="static")
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
 # Configuration values
-KALTURA_SESSION_DURATION = int(os.getenv('KALTURA_SESSION_DURATION', 86400))
-PAGE_SIZE = int(os.getenv('PAGE_SIZE', 10))
-MODEL_TIMEOUT = int(os.getenv('MODEL_TIMEOUT', 60))
-MODEL_MAX_TOKENS = int(os.getenv('MODEL_MAX_TOKENS', 4000))
-MODEL_CHUNK_SIZE = int(os.getenv('MODEL_CHUNK_SIZE', 24000))
-MODEL_TEMPERATURE = float(os.getenv('MODEL_TEMPERATURE', 0))
+KALTURA_SESSION_DURATION = int(os.getenv('KALTURA_SESSION_DURATION', '86400'))
+PAGE_SIZE = int(os.getenv('PAGE_SIZE', '10'))
+MODEL_TIMEOUT = int(os.getenv('MODEL_TIMEOUT', '60'))
+MODEL_MAX_TOKENS = int(os.getenv('MODEL_MAX_TOKENS', '4000'))
+MODEL_CHUNK_SIZE = int(os.getenv('MODEL_CHUNK_SIZE', '24000'))
+MODEL_TEMPERATURE = float(os.getenv('MODEL_TEMPERATURE', '0'))
 MODEL_ID = os.getenv('MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0')
 
 # Initialize clients
@@ -111,7 +112,7 @@ def init_kaltura_session() -> bool:
     if not success:
         logger.error("Failed to initialize Kaltura session")
         return False
-    logger.info(f"Successfully initialized Kaltura session for partner ID: {pid}")
+    logger.info("Successfully initialized Kaltura session for partner ID: %s", pid)
     return True
 
 @app.get("/", response_class=HTMLResponse)
@@ -132,16 +133,15 @@ async def search_videos(category_id: Optional[str] = None, query: Optional[str] 
             number_of_videos=PAGE_SIZE
         )
         
-        logger.info(f"Found {len(videos)} videos with captions")
+        logger.info("Found %d videos with captions", len(videos))
         return {"videos": videos}
         
-    except Exception as e:
-        logger.error(f"Error in search_videos: {str(e)}", exc_info=True)
+    except (KalturaException, ValueError) as e:
+        logger.error("Error in search_videos: %s", str(e), exc_info=True)
         return {"error": str(e)}
 
 async def process_transcript_segment(
     segment_chunks: List[dict],
-    all_chunks: List[dict],
     segment_index: int,
     total_segments: int,
     video_duration: float
@@ -153,7 +153,7 @@ async def process_transcript_segment(
         segment_length = segment_end - segment_start
 
         if segment_length < 15:
-            logger.warning(f"Very short segment (only {segment_length:.2f} seconds)")
+            logger.warning("Very short segment (only %.2f seconds)", segment_length)
 
         timestamped_lines = [
             f"[{round(entry['startTime']/1000, 2):.1f}s - {round(entry['endTime']/1000, 2):.1f}s] {entry['text']}"
@@ -186,8 +186,8 @@ async def process_transcript_segment(
             video_duration
         )
 
-    except Exception as e:
-        logger.error(f"Error processing segment {segment_index + 1}: {str(e)}", exc_info=True)
+    except (ValueError, TypeError) as e:
+        logger.error("Error processing segment %d: %s", segment_index + 1, str(e), exc_info=True)
         return []
 
 def create_segment_analysis_prompt(
@@ -261,7 +261,6 @@ async def generate_timestamps(transcript_chunks: List[dict], video_duration: flo
         segment_tasks = [
             process_transcript_segment(
                 transcript_chunks[i:i + chunks_per_segment],
-                transcript_chunks,
                 i // chunks_per_segment,
                 segment_count,
                 video_duration
@@ -276,8 +275,8 @@ async def generate_timestamps(transcript_chunks: List[dict], video_duration: flo
         
         return filter_timestamps(all_timestamps, video_duration)
 
-    except Exception as e:
-        logger.error(f"Error generating timestamps: {str(e)}", exc_info=True)
+    except (ValueError, TypeError) as e:
+        logger.error("Error generating timestamps: %s", str(e), exc_info=True)
         return []
 
 def filter_timestamps(timestamps: List[TimestampEntry], video_duration: float) -> List[TimestampEntry]:
@@ -294,11 +293,11 @@ def filter_timestamps(timestamps: List[TimestampEntry], video_duration: float) -
 
     target_count = int(video_duration / 180)
     if len(filtered) < target_count * 0.7:
-        logger.warning(f"Generated only {len(filtered)} timestamps for {video_duration/60:.1f} minute video")
+        logger.warning("Generated only %d timestamps for %.1f minute video", len(filtered), video_duration / 60)
 
     return filtered
 
-def finalize_segments(chunk_results: List[VideoAnalysis], video_duration: float) -> dict:
+def finalize_segments(chunk_results: List[VideoAnalysis]) -> dict:
     """Combine chunk results into final analysis"""
     try:
         # Safely extract summaries and insights
@@ -321,7 +320,7 @@ def finalize_segments(chunk_results: List[VideoAnalysis], video_duration: float)
                     if name:  # Only process if we have a valid name
                         topic_scores[name] = max(topic_scores.get(name, 0), score)
                 except (AttributeError, ValueError, TypeError) as e:
-                    logger.warning(f"Skipping invalid topic: {topic}. Error: {str(e)}")
+                    logger.warning("Skipping invalid topic: %s. Error: %s", topic, str(e))
                     continue
         
         # Ensure we have at least one topic
@@ -337,8 +336,8 @@ def finalize_segments(chunk_results: List[VideoAnalysis], video_duration: float)
             ],
             "timestamps": []
         }
-    except Exception as e:
-        logger.error(f"Error in finalize_segments: {str(e)}", exc_info=True)
+    except (KalturaException, ValueError, TypeError, RuntimeError) as e:
+        logger.error("Error in finalize_segments: %s", str(e), exc_info=True)
         return {
             "summary": "Error processing analysis.",
             "insights": ["Error occurred while processing analysis"],
@@ -356,7 +355,7 @@ async def get_analysis_progress(task_id: str):
     )
 
 @app.post("/api/analyze")
-async def analyze_videos(video_ids: List[str], background_tasks: BackgroundTasks):
+async def analyze_videos(video_ids: List[str]):
     """Analyze videos using AI"""
     task_id = f"task_{len(video_ids)}_{int(time.time())}"
     analysis_progress[task_id] = 0
@@ -392,8 +391,8 @@ async def analyze_videos(video_ids: List[str], background_tasks: BackgroundTasks
             "status": "completed"
         }
 
-    except Exception as e:
-        logger.error(f"Fatal error in analyze_videos: {str(e)}", exc_info=True)
+    except (KalturaException, ValueError, TypeError, RuntimeError) as e:
+        logger.error("Fatal error in analyze_videos: %s", str(e), exc_info=True)
         analysis_progress[task_id] = -1
         return {
             "error": str(e),
@@ -423,8 +422,8 @@ async def process_video(video_id: str, task_id: str, total_videos: int) -> dict:
         video_info = kaltura.client.media.get(video_id)
         video_duration = float(video_info.duration)
 
-        chunk_analyses = await process_video_chunks(transcript_chunks, video_duration)
-        final_analysis = finalize_segments(chunk_analyses, video_duration)
+        chunk_analyses = await process_video_chunks(transcript_chunks)
+        final_analysis = finalize_segments(chunk_analyses)
 
         timestamps = await generate_timestamps(transcript_chunks, video_duration)
         final_analysis["timestamps"] = timestamps
@@ -438,8 +437,8 @@ async def process_video(video_id: str, task_id: str, total_videos: int) -> dict:
 
         return result
 
-    except Exception as e:
-        logger.error(f"Error processing video {video_id}: {str(e)}", exc_info=True)
+    except (KalturaException, ValueError, TypeError) as e:
+        logger.error("Error processing video %s: %s", video_id, str(e), exc_info=True)
         return create_error_result(video_id, str(e))
 
 def create_error_result(video_id: str, error_message: str) -> dict:
@@ -462,7 +461,7 @@ def create_error_result(video_id: str, error_message: str) -> dict:
         }
     }
 
-async def process_video_chunks(transcript_chunks: List[dict], video_duration: float) -> List[VideoAnalysis]:
+async def process_video_chunks(transcript_chunks: List[dict]) -> List[VideoAnalysis]:
     """Process video chunks in parallel"""
     chunk_tasks = []
     for i, chunk in enumerate(transcript_chunks):
@@ -505,8 +504,8 @@ Format as VideoAnalysis object."""
             temperature=MODEL_TEMPERATURE
         )
 
-    except Exception as e:
-        logger.error(f"Error processing chunk {chunk_index}: {str(e)}", exc_info=True)
+    except (ValueError, TypeError) as e:
+        logger.error("Error processing chunk %d: %s", chunk_index, str(e), exc_info=True)
         return VideoAnalysis(
             summary=f"Error processing chunk {chunk_index}",
             insights=[f"Error: {str(e)}"],
@@ -584,8 +583,8 @@ async def get_social_clips_response(prompt: str) -> Optional[SocialClipsResponse
             messages=[{"role": "user", "content": prompt}],
             temperature=MODEL_TEMPERATURE
         )
-    except Exception as e:
-        logger.error(f"Error getting social clips response: {e}", exc_info=True)
+    except (asyncio.TimeoutError, ValueError, TypeError, RuntimeError) as e:
+        logger.error("Error getting social clips response: %s", e, exc_info=True)
         return None
 
 def validate_social_clips(suggestions: List[SocialClipSuggestion], context: dict) -> List[SocialClipSuggestion]:
@@ -665,8 +664,8 @@ async def generate_social_clips(context: dict) -> List[SocialClipSuggestion]:
             
         return validate_social_clips(response.suggestions, context)
 
-    except Exception as e:
-        logger.error(f"Error generating social clips: {e}", exc_info=True)
+    except (ValueError, TypeError, RuntimeError) as e:
+        logger.error("Error generating social clips: %s", e, exc_info=True)
         return []
 
 @app.post("/api/chat")
@@ -693,8 +692,8 @@ Provide a clear, direct answer based on the video context above."""
 
     except asyncio.TimeoutError:
         return {"error": "Request timed out. Please try again."}
-    except Exception as e:
-        logger.error(f"Chat error: {e}", exc_info=True)
+    except (ValueError, TypeError) as e:
+        logger.error("Chat error: %s", e, exc_info=True)
         return {"error": str(e)}
 
 if __name__ == "__main__":
@@ -702,7 +701,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host=os.getenv('HOST', '0.0.0.0'),
-        port=int(os.getenv('PORT', 8000)),
+        port=int(os.getenv('PORT', '8000')),
         reload=True,
         server_header=False,
         proxy_headers=True
