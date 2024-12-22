@@ -589,9 +589,20 @@ body {
     transition: all 0.2s ease;
 }
 
-.insights div:hover {
+.insights div.clickable-insight {
+    cursor: pointer;
+    border: 1px solid transparent;
+}
+
+.insights div.clickable-insight:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    border-color: var(--primary);
+    background: rgba(var(--primary-rgb), 0.1);
+}
+
+.insights div.clickable-insight:active {
+    transform: translateY(0);
 }
 
 .topics {
@@ -610,7 +621,23 @@ body {
     color: var(--contrast);
     transition: all 0.3s ease;
     border: 1px solid rgba(var(--primary-rgb), 0.2);
+}
+
+.topics div.clickable-topic {
     cursor: pointer;
+    position: relative;
+}
+
+.topics div.clickable-topic:hover {
+    background: rgba(var(--primary-rgb), 0.2);
+    border-color: var(--primary);
+    transform: scale(1.1) rotate(calc(var(--rotation, 0deg) * -1));
+    box-shadow: 0 4px 8px rgba(var(--primary-rgb), 0.3);
+}
+
+.topics div.clickable-topic:active {
+    transform: scale(0.95) rotate(calc(var(--rotation, 0deg) * -1));
+    box-shadow: 0 2px 4px rgba(var(--primary-rgb), 0.2);
 }
 
 /* Topic size variations */

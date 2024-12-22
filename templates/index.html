@@ -459,6 +459,25 @@
                 createVideoPlayer(videoId, startTime, endTime, playerContainer);
             });
 
+            // Handle clicks on topics and insights
+            analysisResults.addEventListener('click', (e) => {
+                const topic = e.target.closest('.clickable-topic');
+                if (topic) {
+                    const text = topic.textContent.trim();
+                    $('#chat-input').value = `Elaborate more about this topic: ${text}`;
+                    $('#chat-btn').click();
+                    return;
+                }
+
+                const insight = e.target.closest('.clickable-insight');
+                if (insight) {
+                    const text = insight.textContent.trim();
+                    $('#chat-input').value = `Elaborate more about this key takeaway: ${text}`;
+                    $('#chat-btn').click();
+                    return;
+                }
+            });
+
             // Handle tab navigation
             analysisResults.addEventListener('click', (e) => {
                 const tabBtn = e.target.closest('.tab-btn');
@@ -553,15 +572,9 @@
                 ${formattedMessage}
             `;
             
-            const wasNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 100;
             chatMessages.appendChild(messageEl);
-            
-            if (wasNearBottom) {
-                messageEl.scrollIntoView({ behavior: 'smooth' });
-                scrollBottomBtn.style.display = 'none';
-            } else {
-                scrollBottomBtn.style.display = 'flex';
-            }
+            messageEl.scrollIntoView({ behavior: 'smooth' });
+            scrollBottomBtn.style.display = 'none';
         }
 
         // Utility functions
@@ -619,13 +632,13 @@
                 return formatted;
             };
 
-            // Format insights with importance levels
+            // Format insights with importance levels and make them clickable
             const formatInsights = (insights) => {
                 if (!Array.isArray(insights)) return '';
                 return insights.map(insight => {
                     // Remove any bullet points that might be in the text
                     const cleanInsight = insight.replace(/^[•\-\*]\s*/, '');
-                    return `<div>${cleanInsight}</div>`;
+                    return `<div class="clickable-insight" role="button" tabindex="0">${cleanInsight}</div>`;
                 }).join('');
             };
 
@@ -644,7 +657,7 @@
                         // Map importance (1-5) to size classes
                         const sizeClasses = ['topic-xs', 'topic-sm', 'topic-md', 'topic-lg', 'topic-xl'];
                         const sizeClass = sizeClasses[Math.min(Math.floor(importance) - 1, 4)] || 'topic-md';
-                        return `<div class="${sizeClass}">${cleanTopic}</div>`;
+                        return `<div class="${sizeClass} clickable-topic" role="button" tabindex="0">${cleanTopic}</div>`;
                     })
                     .join('');
             };
