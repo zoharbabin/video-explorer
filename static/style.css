@@ -205,8 +205,7 @@ body {
 .tab-nav {
     display: flex;
     gap: 0.5rem;
-    margin: 0.5rem 0;
-    padding: 0 1rem;
+    padding: 1rem;
 }
 
 .tab-btn {
@@ -283,9 +282,8 @@ body {
 .tab-nav {
     display: flex;
     gap: 0.5rem;
-    margin-bottom: 1rem;
     border-bottom: 2px solid var(--card-background-color);
-    padding-bottom: 0.5rem;
+    padding: 1rem;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
 }
@@ -526,8 +524,8 @@ body {
 /* Key Segments */
 .segments {
     display: grid;
-    grid-template-columns: 380px 1fr;
-    gap: 1.5rem;
+    grid-template-columns: 50% 50%;
+    gap: 1rem;
     padding: 1rem 1rem 0;
     height: 100%;
 }
@@ -901,14 +899,16 @@ body {
     }
 
     .tab-nav {
-        padding: 0 1.25rem;
+        padding: 1rem;
     }
 
-    .segments {
+    .segments,
+    .social-clips {
         grid-template-columns: 1fr;
     }
     
-    .segments-grid {
+    .segments-grid,
+    .clips-grid {
         max-height: 400px;
         margin-bottom: 1rem;
     }
@@ -953,7 +953,7 @@ body {
 
     .tab-nav {
         gap: 0.5rem;
-        margin: 0.75rem 0;
+        padding: 1rem;
     }
 
     .tab-btn {
@@ -1040,7 +1040,7 @@ body {
     }
 
     .tab-nav {
-        padding: 0 1rem;
+        padding: 1rem;
         overflow-x: auto;
     }
 
@@ -1080,9 +1080,11 @@ body {
 
 /* Social Clips Section */
 .social-clips {
-    padding: 1.5rem;
     display: grid;
+    grid-template-columns: 50% 50%;
     gap: 1rem;
+    padding: 1rem 1rem 0;
+    height: 100%;
 }
 
 .social-clip-card {
@@ -1133,7 +1135,7 @@ body {
 }
 
 .clip-description {
-    font-size: 1rem;
+    font-size: 0.8rem;
     color: var(--contrast);
     margin-bottom: 0.75rem;
     line-height: 1.5;
@@ -1141,14 +1143,15 @@ body {
 
 .clip-hashtags {
     color: var(--primary);
-    font-size: 0.9rem;
+    font-size: 0.6rem;
     line-height: 1.4;
 }
 
 .preview-clip-btn {
     margin: 0;
-    padding: 0.5rem 1rem;
-    font-size: 0.9rem;
+    padding: 0.1rem 0.5rem;
+    font-size: 0.7rem;
+    font-weight: bold;
     background: var(--primary);
     color: var(--contrast);
     border-radius: 4px;
