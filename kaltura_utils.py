@@ -1,7 +1,12 @@
 import json
 import time
+import logging
 import requests
 from typing import List, Optional, Dict, Tuple
+from logger_config import setup_logging
+
+# Set up logging for this module
+logger = logging.getLogger(__name__)
 from KalturaClient import KalturaClient, KalturaConfiguration
 from KalturaClient.Base import IKalturaLogger
 from KalturaClient.exceptions import KalturaClientException, KalturaException
@@ -37,8 +42,11 @@ from KalturaClient.Plugins.ElasticSearch import (
 )
 
 class KalturaLogger(IKalturaLogger):
+    def __init__(self):
+        self.logger = logging.getLogger('KalturaClient')
+        
     def log(self, msg):
-        print(f"[Kaltura] {msg}")
+        self.logger.debug(msg)
 
 class CustomKalturaClient(KalturaClient):
     def __init__(self, config, max_retries=3, delay=1, backoff=2):
@@ -57,7 +65,7 @@ class CustomKalturaClient(KalturaClient):
                     raise
                 msg = f"{str(error)}, Kaltura API retrying request in {mdelay} seconds..."
                 context = f'Function "{func.__name__}" failed on attempt {self.max_retries - mtries + 1}'
-                self.log(f'Retrying function due to error: {msg} Context: {context}')
+                logger.warning(f'Retrying function due to error: {msg} Context: {context}')
                 time.sleep(mdelay)
                 mtries -= 1
                 mdelay *= self.backoff
@@ -107,7 +115,7 @@ class KalturaUtils:
             return True, self.partner_id
             
         except Exception as e:
-            print(f"Failed to initialize Kaltura session: {e}")
+            logger.error(f"Failed to initialize Kaltura session: {e}")
             return False, -1
 
     def fetch_videos(self, category_ids: Optional[str] = None, free_text: Optional[str] = None, number_of_videos: int = 6) -> List[Dict]:
@@ -197,13 +205,13 @@ class KalturaUtils:
             return self.chunk_transcript(transcript) if transcript else []
             
         except requests.RequestException as e:
-            print(f"Network error getting JSON transcript: {e}")
+            logger.error(f"Network error getting JSON transcript: {e}")
             return []
         except json.JSONDecodeError as e:
-            print(f"Error decoding JSON transcript: {e}")
+            logger.error(f"Error decoding JSON transcript: {e}")
             return []
         except Exception as e:
-            print(f"Unexpected error getting JSON transcript: {e}")
+            logger.error(f"Unexpected error getting JSON transcript: {e}")
             return []
 
     def chunk_transcript(self, data: List[Dict], max_chars: int = 150000, overlap: int = 10000) -> List[Dict]:

@@ -4,6 +4,12 @@ import json
 import time
 import math
 import asyncio
+import logging
+from logger_config import setup_logging
+
+# Set up logging configuration
+setup_logging(os.getenv('LOG_LEVEL', 'INFO'))
+logger = logging.getLogger(__name__)
 from typing import List, Optional, Dict
 from fastapi import FastAPI, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse
@@ -94,9 +100,9 @@ def init_kaltura_session():
     """Initialize Kaltura session"""
     success, pid = kaltura.init_session()
     if not success:
-        print("Failed to initialize Kaltura session")
+        logger.error("Failed to initialize Kaltura session")
         return False
-    print(f"Successfully initialized Kaltura session for partner ID: {pid}")
+    logger.info(f"Successfully initialized Kaltura session for partner ID: {pid}")
     return True
 
 @app.get("/", response_class=HTMLResponse)
@@ -111,11 +117,12 @@ async def home(request: Request):
 async def search_videos(category_id: Optional[str] = None, query: Optional[str] = None):
     """Search for videos with English captions"""
     try:
-        print("Initializing Kaltura session...")
+        logger.info("Initializing Kaltura session...")
         if not init_kaltura_session():
+            logger.error("Failed to initialize Kaltura session")
             return {"error": "Failed to initialize Kaltura session. Please check your credentials."}
         
-        print("Session initialized successfully")
+        logger.info("Session initialized successfully")
         
         # Use the new fetch_videos method that ensures videos have captions
         videos = kaltura.fetch_videos(
@@ -124,11 +131,11 @@ async def search_videos(category_id: Optional[str] = None, query: Optional[str] 
             number_of_videos=PAGE_SIZE
         )
         
-        print(f"Found {len(videos)} videos with captions")
+        logger.info(f"Found {len(videos)} videos with captions")
         return {"videos": videos}
         
     except Exception as e:
-        print(f"Error in search_videos: {str(e)}")
+        logger.error(f"Error in search_videos: {str(e)}", exc_info=True)
         return {"error": str(e)}
 
 
@@ -165,8 +172,8 @@ async def process_transcript_segment(
     """
 
     try:
-        print(f"\n[DEBUG] Processing segment {segment_index + 1}/{total_segments}")
-        print(f"[DEBUG] Input chunks: {len(segment_chunks)} chunks with {sum(len(chunk) for chunk in segment_chunks)} total entries")
+        logger.debug(f"Processing segment {segment_index + 1}/{total_segments}")
+        logger.debug(f"Input chunks: {len(segment_chunks)} chunks with {sum(len(chunk) for chunk in segment_chunks)} total entries")
         
         # --------------------------------------------------------------------
         # 1. Determine start/end times of this segment
@@ -177,9 +184,9 @@ async def process_transcript_segment(
         # If the segment is extremely short, we can process anyway,
         # but optionally warn (instead of skipping).
         segment_length = segment_end - segment_start
-        print(f"[DEBUG] Segment timing: {segment_start:.1f}s -> {segment_end:.1f}s (duration: {segment_length:.1f}s)")
+        logger.debug(f"Segment timing: {segment_start:.1f}s -> {segment_end:.1f}s (duration: {segment_length:.1f}s)")
         if segment_length < 15:
-            print(f"[DEBUG] Warning: Very short segment (only {segment_length:.2f} seconds).")
+            logger.warning(f"Very short segment (only {segment_length:.2f} seconds).")
 
         # --------------------------------------------------------------------
         # 2. Build a line-by-line transcript with exact timestamps
@@ -247,7 +254,7 @@ Example Output:
         # --------------------------------------------------------------------
         # 4. Call the LLM
         # --------------------------------------------------------------------
-        print(f"[DEBUG] Calling LLM for segment analysis...")
+        logger.debug("Calling LLM for segment analysis...")
         segment_timestamps = await asyncio.to_thread(
             llm_client.chat.completions.create,
             model=os.getenv('MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0'),
@@ -257,64 +264,64 @@ Example Output:
             max_tokens=MODEL_MAX_TOKENS,
             temperature=MODEL_TEMPERATURE
         )
-        print(f"[DEBUG] LLM returned {len(segment_timestamps)} timestamps")
+        logger.debug(f"LLM returned {len(segment_timestamps)} timestamps")
 
         # --------------------------------------------------------------------
         # 5. Validate the LLM's Results
         # --------------------------------------------------------------------
-        print(f"[DEBUG] Starting validation of {len(segment_timestamps)} timestamps")
+        logger.debug(f"Starting validation of {len(segment_timestamps)} timestamps")
         valid_results = []
         used_timestamps = set()
 
         for ts in segment_timestamps:
-            print(f"\n[DEBUG] Validating timestamp: {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
-            print(f"[DEBUG] Description: {ts.description}")
-            print(f"[DEBUG] Topic: {ts.topic}")
-            print(f"[DEBUG] Importance: {ts.importance}")
+            logger.debug(f"Validating timestamp: {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
+            logger.debug(f"Description: {ts.description}")
+            logger.debug(f"Topic: {ts.topic}")
+            logger.debug(f"Importance: {ts.importance}")
             
             # Ensure timestamps are within segment range AND video duration
             if ts.start_timestamp < (segment_start - 0.1):
-                print(f"[DEBUG] ❌ Start timestamp {ts.start_timestamp:.1f}s before segment start [{segment_start:.1f}s]")
+                logger.debug(f"❌ Start timestamp {ts.start_timestamp:.1f}s before segment start [{segment_start:.1f}s]")
                 continue
             if ts.end_timestamp > (segment_end + 0.1):
-                print(f"[DEBUG] ❌ End timestamp {ts.end_timestamp:.1f}s after segment end [{segment_end:.1f}s]")
+                logger.debug(f"❌ End timestamp {ts.end_timestamp:.1f}s after segment end [{segment_end:.1f}s]")
                 continue
             if ts.end_timestamp > (video_duration + 0.1):
-                print(f"[DEBUG] ❌ End timestamp {ts.end_timestamp:.1f}s exceeds video duration {video_duration:.1f}s")
+                logger.debug(f"❌ End timestamp {ts.end_timestamp:.1f}s exceeds video duration {video_duration:.1f}s")
                 continue
             if ts.start_timestamp >= ts.end_timestamp:
-                print(f"[DEBUG] ❌ Start timestamp {ts.start_timestamp:.1f}s not before end timestamp {ts.end_timestamp:.1f}s")
+                logger.debug(f"❌ Start timestamp {ts.start_timestamp:.1f}s not before end timestamp {ts.end_timestamp:.1f}s")
                 continue
 
             # If we've already used this exact timestamp pair, skip
             timestamp_pair = (ts.start_timestamp, ts.end_timestamp)
             if timestamp_pair in used_timestamps:
-                print(f"[DEBUG] ❌ Duplicate timestamp pair {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
+                logger.debug(f"❌ Duplicate timestamp pair {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
                 continue
 
             # Good enough to accept
-            print(f"[DEBUG] ✓ Accepted timestamp pair {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
+            logger.debug(f"✓ Accepted timestamp pair {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
             used_timestamps.add(timestamp_pair)
             valid_results.append(ts)
 
-        print(f"\n[DEBUG] Final validation results:")
-        print(f"[DEBUG] - Input timestamps: {len(segment_timestamps)}")
-        print(f"[DEBUG] - Valid timestamps: {len(valid_results)}")
-        print(f"[DEBUG] - Rejected timestamps: {len(segment_timestamps) - len(valid_results)}")
+        logger.debug("Final validation results:")
+        logger.debug(f"- Input timestamps: {len(segment_timestamps)}")
+        logger.debug(f"- Valid timestamps: {len(valid_results)}")
+        logger.debug(f"- Rejected timestamps: {len(segment_timestamps) - len(valid_results)}")
         
         # Return the final, validated timestamps
         return valid_results
 
     except Exception as e:
-        print(f"\n[DEBUG] ❌ ERROR processing segment {segment_index + 1}:")
-        print(f"[DEBUG] Error type: {type(e).__name__}")
-        print(f"[DEBUG] Error message: {str(e)}")
-        print(f"[DEBUG] Segment details:")
-        print(f"[DEBUG] - Start time: {segment_start:.1f}s")
-        print(f"[DEBUG] - End time: {segment_end:.1f}s")
-        print(f"[DEBUG] - Duration: {segment_length:.1f}s")
-        print(f"[DEBUG] - Number of chunks: {len(segment_chunks)}")
-        print(f"[DEBUG] - Total entries: {sum(len(chunk) for chunk in segment_chunks)}")
+        logger.error(f"❌ ERROR processing segment {segment_index + 1}:")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error message: {str(e)}")
+        logger.error("Segment details:")
+        logger.error(f"- Start time: {segment_start:.1f}s")
+        logger.error(f"- End time: {segment_end:.1f}s")
+        logger.error(f"- Duration: {segment_length:.1f}s")
+        logger.error(f"- Number of chunks: {len(segment_chunks)}")
+        logger.error(f"- Total entries: {sum(len(chunk) for chunk in segment_chunks)}")
         return []
 
 async def generate_timestamps(transcript_chunks: List[dict], video_duration: float) -> List[TimestampEntry]:
@@ -347,11 +354,12 @@ async def generate_timestamps(transcript_chunks: List[dict], video_duration: flo
             segment_tasks.append(task)
         
         # Process segments in parallel
-        print(f"Processing {len(segment_tasks)} transcript segments for timestamps...")
+        logger.info(f"Processing {len(segment_tasks)} transcript segments for timestamps...")
         segment_results = await asyncio.gather(*segment_tasks)
         
         # Combine all timestamps
         all_timestamps = [ts for result in segment_results for ts in result]
+        logger.debug(f"Combined {len(all_timestamps)} timestamps from all segments")
         
         # Sort and filter timestamps with minimum spacing
         filtered_timestamps = []
@@ -360,23 +368,27 @@ async def generate_timestamps(transcript_chunks: List[dict], video_duration: flo
         for ts in sorted(all_timestamps, key=lambda x: x.start_timestamp):
             # Validate timestamps are within video duration
             if ts.end_timestamp > video_duration:
+                logger.debug(f"Skipping timestamp {ts.end_timestamp:.1f}s that exceeds video duration {video_duration:.1f}s")
                 continue
                 
             # Check spacing
             if not filtered_timestamps:
                 filtered_timestamps.append(ts)
+                logger.debug(f"Added first timestamp: {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
             elif (ts.start_timestamp - filtered_timestamps[-1].end_timestamp) >= min_gap:
                 filtered_timestamps.append(ts)
+                logger.debug(f"Added timestamp with sufficient gap: {ts.start_timestamp:.1f}s - {ts.end_timestamp:.1f}s")
         
         # Ensure reasonable coverage
         target_count = int(video_duration / 180)  # Aim for one timestamp every ~3 minutes
         if len(filtered_timestamps) < target_count * 0.7:  # If we have less than 70% of target
-            print(f"Warning: Generated only {len(filtered_timestamps)} timestamps for {video_duration/60:.1f} minute video")
+            logger.warning(f"Generated only {len(filtered_timestamps)} timestamps for {video_duration/60:.1f} minute video")
         
+        logger.info(f"Final timestamp count: {len(filtered_timestamps)}")
         return filtered_timestamps
 
     except Exception as e:
-        print(f"Error generating timestamps: {str(e)}")
+        logger.error(f"Error generating timestamps: {str(e)}", exc_info=True)
         return []
 
 def finalize_segments(chunk_results: List[VideoAnalysis], video_duration: float) -> dict:
@@ -532,8 +544,10 @@ Example structure:
             """Process a single video with parallel chunk processing"""
             try:
                 # Get English captions
+                logger.info(f"Fetching English captions for video {video_id}...")
                 captions = kaltura.get_english_captions(video_id)
                 if not captions:
+                    logger.warning(f"No English captions found for video {video_id}")
                     return {
                         "video_id": video_id,
                         "analysis": {
@@ -545,9 +559,10 @@ Example structure:
                     }
 
                 # Get JSON transcript and chunk it
-                print(f"Getting JSON transcript for video {video_id}...")
+                logger.info(f"Getting JSON transcript for video {video_id}...")
                 transcript_chunks = kaltura.get_json_transcript(captions[0]['id'])
                 if not transcript_chunks:
+                    logger.warning(f"No readable transcript content found for video {video_id}")
                     return {
                         "video_id": video_id,
                         "analysis": {
@@ -558,7 +573,7 @@ Example structure:
                         }
                     }
 
-                print(f"Got {len(transcript_chunks)} transcript chunks")
+                logger.info(f"Got {len(transcript_chunks)} transcript chunks for video {video_id}")
                 
                 # Get video duration from Kaltura
                 video_info = kaltura.client.media.get(video_id)
@@ -575,24 +590,25 @@ Example structure:
                     }
                     chunk_tasks.append(process_chunk(chunk_data, i, len(transcript_chunks), video_duration))
 
-                print(f"Starting parallel analysis of {len(chunk_tasks)} chunks...")
+                logger.info(f"Starting parallel analysis of {len(chunk_tasks)} chunks...")
                 chunk_analyses = await asyncio.gather(*chunk_tasks)
                 # Combine analyses first
-                print(f"Combining analyses from {len(chunk_analyses)} chunks...")
+                logger.info(f"Combining analyses from {len(chunk_analyses)} chunks...")
                 final_analysis = finalize_segments(chunk_analyses, video_duration)
 
                 # Generate timestamps from full transcript
-                print("Generating timestamps from full transcript...")
+                logger.info("Generating timestamps from full transcript...")
                 timestamps = await generate_timestamps(transcript_chunks, video_duration)
-                print(f"Generated {len(timestamps)} timestamps")
+                logger.info(f"Generated {len(timestamps)} timestamps")
 
                 # Add timestamps to final analysis
                 final_analysis["timestamps"] = timestamps
 
                 # Now generate social clips with timestamps available
-                print("Generating social clips suggestions...")
+                logger.info("Generating social clips suggestions...")
                 social_clips = await generate_social_clips(final_analysis)
                 final_analysis["social_clips"] = social_clips
+                logger.info(f"Generated {len(social_clips)} social clip suggestions")
                 
                 result = {
                     "video_id": video_id,
@@ -610,7 +626,7 @@ Example structure:
                 return result
 
             except Exception as e:
-                print(f"Error processing video {video_id}: {str(e)}")
+                logger.error(f"Error processing video {video_id}: {str(e)}", exc_info=True)
                 return {
                     "video_id": video_id,
                     "analysis": {
@@ -623,7 +639,7 @@ Example structure:
 
         # Process videos in parallel
         total_videos = len(videos_to_process)
-        print(f"\nStarting analysis of {total_videos} videos...")
+        logger.info(f"Starting analysis of {total_videos} videos...")
         video_tasks = [
             process_video(
                 video_id=video_id,
@@ -645,7 +661,7 @@ Example structure:
         }
 
     except Exception as e:
-        print(f"Fatal error in analyze_videos: {str(e)}")
+        logger.error(f"Fatal error in analyze_videos: {str(e)}", exc_info=True)
         analysis_progress[task_id] = -1  # Indicate error
         return {
             "error": str(e),
@@ -670,33 +686,33 @@ class ChatRequest(BaseModel):
 async def generate_social_clips(context: dict) -> List[SocialClipSuggestion]:
     """Generate suggestions for social media clips"""
     try:
-        print("\nGenerating social clip suggestions...")
+        logger.info("Generating social clip suggestions...")
         
-        print("\nDEBUG: Analyzing context for social clips...")
-        print(f"Context type: {type(context)}")
-        print(f"Context keys: {list(context.keys())}")
+        logger.debug("Analyzing context for social clips...")
+        logger.debug(f"Context type: {type(context)}")
+        logger.debug(f"Context keys: {list(context.keys())}")
         
         # Extract and validate key moments and topics
         key_moments = context.get('timestamps', [])
-        print(f"\nDEBUG: Raw key_moments: {key_moments}")
-        print(f"DEBUG: Type of key_moments: {type(key_moments)}")
+        logger.debug(f"Raw key_moments: {key_moments}")
+        logger.debug(f"Type of key_moments: {type(key_moments)}")
         
         if not key_moments:
-            print("❌ No key moments found in context")
+            logger.warning("❌ No key moments found in context")
             return []
             
         # Ensure timestamps are in the correct format
         formatted_moments = []
-        print("\nProcessing timestamps:")
+        logger.debug("Processing timestamps:")
         for moment in key_moments:
             try:
                 # If it's a dict, ensure it has the required fields
                 if isinstance(moment, dict):
                     if all(k in moment for k in ['start_timestamp', 'end_timestamp', 'description', 'topic', 'importance']):
                         formatted_moments.append(moment)
-                        print(f"✓ Valid timestamp: {moment['start_timestamp']}s - {moment['end_timestamp']}s ({moment['topic']})")
+                        logger.debug(f"✓ Valid timestamp: {moment['start_timestamp']}s - {moment['end_timestamp']}s ({moment['topic']})")
                     else:
-                        print(f"❌ Dict missing required fields: {moment}")
+                        logger.warning(f"❌ Dict missing required fields: {moment}")
                         continue
                 
                 # If it's a TimestampEntry, convert to dict
@@ -709,7 +725,7 @@ async def generate_social_clips(context: dict) -> List[SocialClipSuggestion]:
                         'importance': moment.importance
                     }
                     formatted_moments.append(moment_dict)
-                    print(f"✓ Converted TimestampEntry: {moment.start_timestamp}s - {moment.end_timestamp}s ({moment.topic})")
+                    logger.debug(f"✓ Converted TimestampEntry: {moment.start_timestamp}s - {moment.end_timestamp}s ({moment.topic})")
                 
                 # If it has the required attributes, create a dict
                 elif all(hasattr(moment, attr) for attr in ['start_timestamp', 'end_timestamp', 'description', 'topic', 'importance']):
@@ -721,24 +737,24 @@ async def generate_social_clips(context: dict) -> List[SocialClipSuggestion]:
                         'importance': getattr(moment, 'importance')
                     }
                     formatted_moments.append(moment_dict)
-                    print(f"✓ Converted object: {moment_dict['start_timestamp']}s - {moment_dict['end_timestamp']}s ({moment_dict['topic']})")
+                    logger.debug(f"✓ Converted object: {moment_dict['start_timestamp']}s - {moment_dict['end_timestamp']}s ({moment_dict['topic']})")
                 
                 else:
-                    print(f"❌ Invalid timestamp format: {type(moment)}")
-                    print(f"Available attributes: {dir(moment) if hasattr(moment, '__dir__') else 'No attributes'}")
+                    logger.warning(f"❌ Invalid timestamp format: {type(moment)}")
+                    logger.debug(f"Available attributes: {dir(moment) if hasattr(moment, '__dir__') else 'No attributes'}")
                     continue
                     
             except Exception as e:
-                print(f"❌ Error processing timestamp: {str(e)}")
+                logger.error(f"❌ Error processing timestamp: {str(e)}", exc_info=True)
                 continue
         
         if not formatted_moments:
-            print("❌ No valid formatted moments")
+            logger.warning("❌ No valid formatted moments")
             return []
             
         # Replace the key_moments with properly formatted ones
         key_moments = formatted_moments
-        print(f"✓ Successfully formatted {len(key_moments)} timestamps")
+        logger.info(f"✓ Successfully formatted {len(key_moments)} timestamps")
             
         # Ensure topics are JSON serializable
         topics = []
@@ -852,7 +868,7 @@ IMPORTANT:
         # Add serializable context to prompt
         prompt += f"\n\nVideo Context:\n{json.dumps(serializable_context, indent=2)}"
         
-        print("\nSending social clips request to LLM...")
+        logger.info("Sending social clips request to LLM...")
         try:
             # Get response with proper model
             response = await asyncio.to_thread(
@@ -864,26 +880,26 @@ IMPORTANT:
             )
             
             if not response or not response.suggestions:
-                print("❌ No valid suggestions in LLM response")
+                logger.warning("❌ No valid suggestions in LLM response")
                 return []
                 
-            print(f"✓ Successfully parsed {len(response.suggestions)} suggestions from LLM")
+            logger.info(f"✓ Successfully parsed {len(response.suggestions)} suggestions from LLM")
             
         except Exception as e:
-            print(f"❌ Error in LLM request: {str(e)}")
+            logger.error(f"❌ Error in LLM request: {str(e)}", exc_info=True)
             return []
         
         # Validate and filter suggestions
         valid_suggestions = []
         used_timestamps = set()
         
-        print(f"Validating {len(response.suggestions)} social clip suggestions...")
+        logger.info(f"Validating {len(response.suggestions)} social clip suggestions...")
         for suggestion in response.suggestions:
-            print(f"\nValidating clip suggestion:")
-            print(f"Start time: {suggestion.start_time:.1f}s")
-            print(f"End time: {suggestion.end_time:.1f}s")
-            print(f"Platform: {suggestion.platform}")
-            print(f"Description: {suggestion.description}")
+            logger.debug("Validating clip suggestion:")
+            logger.debug(f"Start time: {suggestion.start_time:.1f}s")
+            logger.debug(f"End time: {suggestion.end_time:.1f}s")
+            logger.debug(f"Platform: {suggestion.platform}")
+            logger.debug(f"Description: {suggestion.description}")
             
             # Find best matching key moment
             best_match = None
@@ -904,12 +920,12 @@ IMPORTANT:
             
             # Accept if within 60 seconds total tolerance for longer segments
             if best_match and min_diff <= 60:  # Allow up to 30 seconds difference per timestamp
-                print(f"✓ Found matching key moment: {best_match.start_timestamp:.1f}s - {best_match.end_timestamp:.1f}s")
+                logger.debug(f"✓ Found matching key moment: {best_match.start_timestamp:.1f}s - {best_match.end_timestamp:.1f}s")
                 # Use exact timestamps from the key moment, handling both object and dict formats
                 suggestion.start_time = best_match.start_timestamp if hasattr(best_match, 'start_timestamp') else best_match.get('start_timestamp')
                 suggestion.end_time = best_match.end_timestamp if hasattr(best_match, 'end_timestamp') else best_match.get('end_timestamp')
             else:
-                print(f"❌ No close matching key moment found (min diff: {min_diff:.1f}s)")
+                logger.debug(f"❌ No close matching key moment found (min diff: {min_diff:.1f}s)")
                 continue
                 
             # Validate clip duration with high flexibility for longer segments
@@ -917,24 +933,24 @@ IMPORTANT:
             min_duration = 20  # Minimum 20 seconds
             max_duration = 300  # Allow up to 5 minutes for important segments
             
-            print(f"Checking duration: {duration:.1f}s")
+            logger.debug(f"Checking duration: {duration:.1f}s")
             if duration < min_duration:
-                print(f"❌ Clip too short: {duration:.1f}s < {min_duration}s minimum")
+                logger.debug(f"❌ Clip too short: {duration:.1f}s < {min_duration}s minimum")
                 continue
             if duration > max_duration:
-                print(f"❌ Clip too long: {duration:.1f}s > {max_duration}s maximum")
+                logger.debug(f"❌ Clip too long: {duration:.1f}s > {max_duration}s maximum")
                 continue
                 
-            print(f"✓ Duration acceptable: {duration:.1f}s")
+            logger.debug(f"✓ Duration acceptable: {duration:.1f}s")
                 
             # Check for overlapping clips
             timestamp_pair = (suggestion.start_time, suggestion.end_time)
             if timestamp_pair in used_timestamps:
-                print(f"❌ Skipping clip: Duplicate timestamp pair {suggestion.start_time:.1f}s - {suggestion.end_time:.1f}s")
+                logger.debug(f"❌ Skipping clip: Duplicate timestamp pair {suggestion.start_time:.1f}s - {suggestion.end_time:.1f}s")
                 continue
                 
             # Enhance description for better engagement
-            print("\nChecking description engagement...")
+            logger.debug("Checking description engagement...")
             engagement_markers = ['?', 'agree', 'think', 'debate', 'discuss', 'share', 'opinion', 'controversial', 'surprising']
             provocative_markers = ['🔥', '💡', '🤔', '👀', '💪', '🚀']
             
@@ -942,17 +958,17 @@ IMPORTANT:
             has_emoji = any(marker in suggestion.description for marker in provocative_markers)
             
             if not has_engagement or not has_emoji:
-                print("Enhancing description engagement...")
+                logger.debug("Enhancing description engagement...")
                 if not has_emoji:
                     suggestion.description = f"🔥 {suggestion.description}"
                 if not has_engagement:
                     suggestion.description += " What's your take on this? Share your thoughts! 💭"
-                print(f"✓ Enhanced description: {suggestion.description}")
+                logger.debug(f"✓ Enhanced description: {suggestion.description}")
             else:
-                print("✓ Description already engaging")
+                logger.debug("✓ Description already engaging")
                 
             # Enhance hashtags for better reach
-            print("\nEnhancing hashtags...")
+            logger.debug("Enhancing hashtags...")
             current_hashtags = suggestion.hashtags.split()
             
             # Get top topics by importance
@@ -975,23 +991,23 @@ IMPORTANT:
                             list(all_hashtags))[:8]
             
             suggestion.hashtags = ' '.join(sorted(set(final_hashtags)))  # Remove any duplicates
-            print(f"✓ Enhanced hashtags: {suggestion.hashtags}")
+            logger.debug(f"✓ Enhanced hashtags: {suggestion.hashtags}")
                 
-            print(f"✓ Valid clip: {suggestion.start_time:.1f}s - {suggestion.end_time:.1f}s")
+            logger.debug(f"✓ Valid clip: {suggestion.start_time:.1f}s - {suggestion.end_time:.1f}s")
             used_timestamps.add(timestamp_pair)
             valid_suggestions.append(suggestion)
             
-        print(f"Found {len(valid_suggestions)} valid social clip suggestions")
+        logger.info(f"Found {len(valid_suggestions)} valid social clip suggestions")
         return valid_suggestions
     except Exception as e:
-        print(f"Error generating social clips: {e}")
+        logger.error(f"Error generating social clips: {e}", exc_info=True)
         return []
 
 @app.post("/api/chat")
 async def chat_with_videos(request: ChatRequest):
     """Chat with the analyzed videos using instructor and litellm"""
     try:
-        print(f"Received chat request with context from {len(request.context)} videos")
+        logger.info(f"Received chat request with context from {len(request.context)} videos")
         
         prompt = f"""Question: {request.question}
 
@@ -1001,7 +1017,7 @@ Video Context:
 Instructions:
 Provide a clear, direct answer based on the video context above. Focus on accuracy and relevance."""
         
-        print("Sending chat request to LLM...")
+        logger.info("Sending chat request to LLM...")
         response = await asyncio.to_thread(
             llm_client.chat.completions.create,
             model=os.getenv('MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0'),
@@ -1010,12 +1026,13 @@ Provide a clear, direct answer based on the video context above. Focus on accura
             temperature=MODEL_TEMPERATURE
         )
         
+        logger.info("Successfully received LLM response")
         return {"answer": response.answer}
     except asyncio.TimeoutError as e:
-        print(f"Timeout error in chat: {e}")
+        logger.error(f"Timeout error in chat: {e}")
         return {"error": "Request timed out. Please try again."}
     except Exception as e:
-        print(f"Unexpected error in chat: {e}")
+        logger.error(f"Unexpected error in chat: {e}", exc_info=True)
         return {"error": str(e)}
 
 if __name__ == "__main__":

@@ -87,6 +87,13 @@ MODEL_MAX_TOKENS=4000
 MODEL_CHUNK_SIZE=24000
 MODEL_TEMPERATURE=0
 PAGE_SIZE=10
+
+# Logging Configuration
+LOG_LEVEL=INFO  # Main application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+KALTURA_LOG_LEVEL=WARNING  # Kaltura client log level
+AWS_LOG_LEVEL=WARNING  # AWS/boto3 log level
+HTTP_LOG_LEVEL=WARNING  # HTTP client log level
+LITELLM_LOG_LEVEL=WARNING  # LiteLLM log level
 ```
 
 ## Architecture
@@ -104,12 +111,30 @@ PAGE_SIZE=10
 - **Responsive Design**: Mobile-first approach
 - **Dynamic UI**: Real-time updates and animations
 
+### Logging System
+The application uses a robust, configurable logging system with the following features:
+- **Color-coded log levels**: Different colors for DEBUG, INFO, WARNING, ERROR, and CRITICAL logs
+- **Timestamps**: Precise timestamps for each log entry
+- **Source location**: File names and line numbers for easy debugging
+- **Configurable levels**: Separate log levels for main application and third-party libraries
+- **Structured format**: Consistent log format across all components
+- **Third-party integration**: Controlled logging for Kaltura, AWS, HTTP, and LiteLLM
+
+Example log output:
+```
+2024-03-20 10:15:30.123 [INFO] main:125 - Starting video analysis...
+2024-03-20 10:15:30.456 [DEBUG] kaltura_utils:89 - Successfully retrieved video metadata
+2024-03-20 10:15:31.789 [WARNING] main:256 - Processing delay detected
+2024-03-20 10:15:32.012 [ERROR] main:789 - Failed to process video segment
+```
+
 ### Key Features
 1. Parallel processing of video analysis
 2. Intelligent chunking for long videos
 3. In-memory caching of analysis results
 4. Real-time progress tracking
 5. Structured AI responses for consistent output
+6. Comprehensive logging system
 
 ## API Endpoints
 
@@ -131,6 +156,8 @@ python main.py
 ```
 video-explorer/
 ├── main.py           # Application logic and API endpoints
+├── kaltura_utils.py  # Kaltura integration utilities
+├── logger_config.py  # Logging configuration
 ├── static/
 │   └── style.css    # Application styling
 ├── templates/
