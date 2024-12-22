@@ -262,7 +262,7 @@ body {
 }
 
 .analysis-accordion.expanded .analysis-content {
-    max-height: calc(100vh - 200px);
+    max-height: 100vh;
     opacity: 1;
     pointer-events: auto;
 }
@@ -613,7 +613,7 @@ body {
 
 .segment-content .segment-title {
     font-weight: normal;
-    font-size: 0.7em;
+    font-size: 0.65em;
 }
 
 .segment-time {
@@ -625,8 +625,8 @@ body {
     padding: 2px 6px;
     border-radius: 3px;
     font-family: monospace;
-    font-size: 0.75rem;
-    font-weight: normal;
+    font-size: 0.5rem;
+    font-weight: bold;
 }
 
 .segment-desc {
@@ -1076,6 +1076,112 @@ body {
     .topics div {
         font-size: 0.85rem;
     }
+}
+
+/* Social Clips Section */
+.social-clips {
+    padding: 1.5rem;
+    display: grid;
+    gap: 1rem;
+}
+
+.social-clip-card {
+    background: var(--card-background-color);
+    border-radius: 8px;
+    padding: 1.5rem;
+    position: relative;
+    border: 1px solid rgba(var(--primary-rgb), 0.1);
+    transition: all 0.2s ease;
+}
+
+.social-clip-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.platform-badge {
+    position: absolute;
+    top: 1rem;
+    right: 1rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: 500;
+}
+
+.platform-badge.linkedin {
+    background: #0077b5;
+    color: white;
+}
+
+.platform-badge.youtube {
+    background: #ff0000;
+    color: white;
+}
+
+.clip-time {
+    font-family: monospace;
+    color: var(--primary);
+    font-size: 0.9rem;
+    margin-bottom: 0.75rem;
+}
+
+.clip-content {
+    margin: 1rem 0;
+}
+
+.clip-description {
+    font-size: 1rem;
+    color: var(--contrast);
+    margin-bottom: 0.75rem;
+    line-height: 1.5;
+}
+
+.clip-hashtags {
+    color: var(--primary);
+    font-size: 0.9rem;
+    line-height: 1.4;
+}
+
+.preview-clip-btn {
+    margin: 0;
+    padding: 0.5rem 1rem;
+    font-size: 0.9rem;
+    background: var(--primary);
+    color: var(--contrast);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.preview-clip-btn:hover {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+}
+
+#social-clips-results article p {
+    margin: 0.75rem 0;
+    line-height: 1.6;
+    color: var(--secondary);
+}
+
+#generate-clips-btn {
+    margin: 0;
+    padding: 0.75rem 1.5rem;
+    border-radius: 6px;
+    background: var(--primary);
+    color: var(--contrast);
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+#generate-clips-btn:hover {
+    background: var(--primary-hover);
+    transform: translateY(-1px);
+}
+
+#generate-clips-btn:active {
+    transform: translateY(1px);
 }
 
 /* Dark Theme */

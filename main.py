@@ -223,7 +223,7 @@ Instructions:
    - importance (1-5) -> 5 for major transitions, 3-4 for significant points, etc.
 6. Make sure there are no overlapping timestamps or duplicates.
 7. The list of moments returned should cover the entire segment without gaps in time.
-8. Each topic should be at least 60 seconds long.
+8. Each topic should be at least 30 seconds long.
 
 Example Output:
 [
@@ -355,7 +355,7 @@ async def generate_timestamps(transcript_chunks: List[dict], video_duration: flo
         
         # Sort and filter timestamps with minimum spacing
         filtered_timestamps = []
-        min_gap = 90  # 1.5 minutes minimum gap
+        min_gap = 30  # 30 seconds minimum gap
         
         for ts in sorted(all_timestamps, key=lambda x: x.start_timestamp):
             # Validate timestamps are within video duration
@@ -577,18 +577,22 @@ Example structure:
 
                 print(f"Starting parallel analysis of {len(chunk_tasks)} chunks...")
                 chunk_analyses = await asyncio.gather(*chunk_tasks)
+                # Combine analyses first
+                print(f"Combining analyses from {len(chunk_analyses)} chunks...")
+                final_analysis = finalize_segments(chunk_analyses, video_duration)
 
                 # Generate timestamps from full transcript
                 print("Generating timestamps from full transcript...")
                 timestamps = await generate_timestamps(transcript_chunks, video_duration)
                 print(f"Generated {len(timestamps)} timestamps")
 
-                # Combine analyses
-                print(f"Combining analyses from {len(chunk_analyses)} chunks...")
-                final_analysis = finalize_segments(chunk_analyses, video_duration)
-                
                 # Add timestamps to final analysis
                 final_analysis["timestamps"] = timestamps
+
+                # Now generate social clips with timestamps available
+                print("Generating social clips suggestions...")
+                social_clips = await generate_social_clips(final_analysis)
+                final_analysis["social_clips"] = social_clips
                 
                 result = {
                     "video_id": video_id,
@@ -649,9 +653,339 @@ Example structure:
             "status": "failed"
         }
 
+class SocialClipSuggestion(BaseModel):
+    start_time: float = Field(description="Start time of the clip in seconds")
+    end_time: float = Field(description="End time of the clip in seconds")
+    description: str = Field(description="Description for the social media post")
+    hashtags: str = Field(description="Suggested hashtags for the post")
+    platform: str = Field(description="Target platform (LinkedIn or YouTube)")
+
+class SocialClipsResponse(BaseModel):
+    suggestions: List[SocialClipSuggestion]
+
 class ChatRequest(BaseModel):
     question: str
     context: List[dict]
+
+async def generate_social_clips(context: dict) -> List[SocialClipSuggestion]:
+    """Generate suggestions for social media clips"""
+    try:
+        print("\nGenerating social clip suggestions...")
+        
+        print("\nDEBUG: Analyzing context for social clips...")
+        print(f"Context type: {type(context)}")
+        print(f"Context keys: {list(context.keys())}")
+        
+        # Extract and validate key moments and topics
+        key_moments = context.get('timestamps', [])
+        print(f"\nDEBUG: Raw key_moments: {key_moments}")
+        print(f"DEBUG: Type of key_moments: {type(key_moments)}")
+        
+        if not key_moments:
+            print("❌ No key moments found in context")
+            return []
+            
+        # Ensure timestamps are in the correct format
+        formatted_moments = []
+        print("\nProcessing timestamps:")
+        for moment in key_moments:
+            try:
+                # If it's a dict, ensure it has the required fields
+                if isinstance(moment, dict):
+                    if all(k in moment for k in ['start_timestamp', 'end_timestamp', 'description', 'topic', 'importance']):
+                        formatted_moments.append(moment)
+                        print(f"✓ Valid timestamp: {moment['start_timestamp']}s - {moment['end_timestamp']}s ({moment['topic']})")
+                    else:
+                        print(f"❌ Dict missing required fields: {moment}")
+                        continue
+                
+                # If it's a TimestampEntry, convert to dict
+                elif isinstance(moment, TimestampEntry):
+                    moment_dict = {
+                        'start_timestamp': moment.start_timestamp,
+                        'end_timestamp': moment.end_timestamp,
+                        'description': moment.description,
+                        'topic': moment.topic,
+                        'importance': moment.importance
+                    }
+                    formatted_moments.append(moment_dict)
+                    print(f"✓ Converted TimestampEntry: {moment.start_timestamp}s - {moment.end_timestamp}s ({moment.topic})")
+                
+                # If it has the required attributes, create a dict
+                elif all(hasattr(moment, attr) for attr in ['start_timestamp', 'end_timestamp', 'description', 'topic', 'importance']):
+                    moment_dict = {
+                        'start_timestamp': getattr(moment, 'start_timestamp'),
+                        'end_timestamp': getattr(moment, 'end_timestamp'),
+                        'description': getattr(moment, 'description'),
+                        'topic': getattr(moment, 'topic'),
+                        'importance': getattr(moment, 'importance')
+                    }
+                    formatted_moments.append(moment_dict)
+                    print(f"✓ Converted object: {moment_dict['start_timestamp']}s - {moment_dict['end_timestamp']}s ({moment_dict['topic']})")
+                
+                else:
+                    print(f"❌ Invalid timestamp format: {type(moment)}")
+                    print(f"Available attributes: {dir(moment) if hasattr(moment, '__dir__') else 'No attributes'}")
+                    continue
+                    
+            except Exception as e:
+                print(f"❌ Error processing timestamp: {str(e)}")
+                continue
+        
+        if not formatted_moments:
+            print("❌ No valid formatted moments")
+            return []
+            
+        # Replace the key_moments with properly formatted ones
+        key_moments = formatted_moments
+        print(f"✓ Successfully formatted {len(key_moments)} timestamps")
+            
+        # Ensure topics are JSON serializable
+        topics = []
+        raw_topics = context.get('topics', [])
+        for topic in raw_topics:
+            if isinstance(topic, dict):
+                topics.append(topic)
+            else:
+                topics.append({
+                    'name': topic.name if hasattr(topic, 'name') else str(topic),
+                    'importance': topic.importance if hasattr(topic, 'importance') else 3
+                })
+        
+        if not topics:
+            print("⚠️ No topics found in context, will generate generic hashtags")
+            
+        print(f"Found {len(key_moments)} key moments and {len(topics)} topics")
+        
+        # Format timestamps for the prompt, handling both dict and TimestampEntry objects
+        formatted_timestamps = []
+        for moment in key_moments:
+            if isinstance(moment, dict):
+                formatted_timestamps.append({
+                    'start_time': moment['start_timestamp'],
+                    'end_time': moment['end_timestamp'],
+                    'description': moment['description'],
+                    'topic': moment['topic'],
+                    'importance': moment['importance']
+                })
+            else:  # TimestampEntry object
+                formatted_timestamps.append({
+                    'start_time': moment.start_timestamp,
+                    'end_time': moment.end_timestamp,
+                    'description': moment.description,
+                    'topic': moment.topic,
+                    'importance': moment.importance
+                })
+
+        # Prepare example without f-string interpolation
+        example = {
+            "suggestions": [
+                {
+                    "start_time": 120.5,
+                    "end_time": 180.0,
+                    "description": "🔥 Controversial take: Traditional machine learning is dead. Watch how our new approach achieves 95% accuracy while completely bypassing conventional neural networks. Do you agree this is the future?",
+                    "hashtags": "#AIDebate #FutureOfML #TechDisruption #Innovation",
+                    "platform": "LinkedIn"
+                }
+            ]
+        }
+
+        prompt = f"""You are a social media expert tasked with identifying viral-worthy clips from video content. Your goal is to find moments that will spark intense discussions and debates on LinkedIn and YouTube.
+
+AVAILABLE TIMESTAMPS AND TOPICS:
+IMPORTANT: Use timestamps from the AVAILABLE TIMESTAMPS FOR CLIPS section below. Each clip MUST use exact start_time and end_time values from this list:
+{json.dumps(formatted_timestamps, indent=2)}
+
+Main Topics and Their Importance:
+{json.dumps(topics, indent=2)}
+
+TASK:
+Identify 3-4 highly engaging clips that will generate maximum engagement on social media. Each clip must:
+1. Use EXACT start_time and end_time from the Key Moments list above
+2. Be between 30-300 seconds in duration (0.5 to 5 minutes)
+3. Focus on controversial or debate-worthy content
+4. Include a provocative description that encourages responses
+5. Use trending hashtags relevant to the topic
+
+CLIP SELECTION CRITERIA:
+1. Controversial Content:
+   - Challenges established industry practices
+   - Presents unexpected or surprising results
+   - Offers contrarian viewpoints
+   - Questions common assumptions
+
+2. Platform-Specific Focus:
+   - LinkedIn: Industry disruption, professional debates, future trends
+   - YouTube: Technical deep-dives, visual demonstrations, broader discussions
+
+3. Viral Potential:
+   - Emotionally engaging content
+   - "Hot take" moments
+   - Surprising revelations
+   - Counterintuitive findings
+
+YOUR RESPONSE MUST BE A VALID JSON OBJECT WITH THIS EXACT STRUCTURE:
+{json.dumps({"suggestions": [
+    {
+        "start_time": 123.4,  # MUST match a timestamp from Key Moments
+        "end_time": 189.7,    # MUST match a timestamp from Key Moments
+        "description": "🔥 Hot Take: Why traditional approaches are failing...",
+        "hashtags": "#TrendingHashtag #Industry #Topic",
+        "platform": "LinkedIn"  # or "YouTube"
+    }
+]}, indent=2)}
+
+IMPORTANT:
+- Only use timestamps that exist in the Key Moments list
+- Ensure descriptions are provocative and encourage debate
+- Include trending hashtags
+- Format must match the example exactly"""
+        
+        # Create a JSON-serializable version of the context
+        serializable_context = {
+            'summary': context.get('summary', ''),
+            'insights': context.get('insights', []),
+            'topics': topics,  # We already made this serializable
+            'timestamps': formatted_timestamps  # We already made this serializable
+        }
+        
+        # Add serializable context to prompt
+        prompt += f"\n\nVideo Context:\n{json.dumps(serializable_context, indent=2)}"
+        
+        print("\nSending social clips request to LLM...")
+        try:
+            # Get response with proper model
+            response = await asyncio.to_thread(
+                llm_client.chat.completions.create,
+                model=os.getenv('MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0'),
+                response_model=SocialClipsResponse,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=MODEL_TEMPERATURE
+            )
+            
+            if not response or not response.suggestions:
+                print("❌ No valid suggestions in LLM response")
+                return []
+                
+            print(f"✓ Successfully parsed {len(response.suggestions)} suggestions from LLM")
+            
+        except Exception as e:
+            print(f"❌ Error in LLM request: {str(e)}")
+            return []
+        
+        # Validate and filter suggestions
+        valid_suggestions = []
+        used_timestamps = set()
+        
+        print(f"Validating {len(response.suggestions)} social clip suggestions...")
+        for suggestion in response.suggestions:
+            print(f"\nValidating clip suggestion:")
+            print(f"Start time: {suggestion.start_time:.1f}s")
+            print(f"End time: {suggestion.end_time:.1f}s")
+            print(f"Platform: {suggestion.platform}")
+            print(f"Description: {suggestion.description}")
+            
+            # Find best matching key moment
+            best_match = None
+            min_diff = float('inf')
+            
+            for moment in context.get('timestamps', []):
+                # Get start and end timestamps regardless of format
+                moment_start = moment.start_timestamp if hasattr(moment, 'start_timestamp') else moment.get('start_timestamp', 0)
+                moment_end = moment.end_timestamp if hasattr(moment, 'end_timestamp') else moment.get('end_timestamp', 0)
+                
+                start_diff = abs(suggestion.start_time - moment_start)
+                end_diff = abs(suggestion.end_time - moment_end)
+                total_diff = start_diff + end_diff
+                
+                if total_diff < min_diff:
+                    min_diff = total_diff
+                    best_match = moment
+            
+            # Accept if within 60 seconds total tolerance for longer segments
+            if best_match and min_diff <= 60:  # Allow up to 30 seconds difference per timestamp
+                print(f"✓ Found matching key moment: {best_match.start_timestamp:.1f}s - {best_match.end_timestamp:.1f}s")
+                # Use exact timestamps from the key moment, handling both object and dict formats
+                suggestion.start_time = best_match.start_timestamp if hasattr(best_match, 'start_timestamp') else best_match.get('start_timestamp')
+                suggestion.end_time = best_match.end_timestamp if hasattr(best_match, 'end_timestamp') else best_match.get('end_timestamp')
+            else:
+                print(f"❌ No close matching key moment found (min diff: {min_diff:.1f}s)")
+                continue
+                
+            # Validate clip duration with high flexibility for longer segments
+            duration = suggestion.end_time - suggestion.start_time
+            min_duration = 20  # Minimum 20 seconds
+            max_duration = 300  # Allow up to 5 minutes for important segments
+            
+            print(f"Checking duration: {duration:.1f}s")
+            if duration < min_duration:
+                print(f"❌ Clip too short: {duration:.1f}s < {min_duration}s minimum")
+                continue
+            if duration > max_duration:
+                print(f"❌ Clip too long: {duration:.1f}s > {max_duration}s maximum")
+                continue
+                
+            print(f"✓ Duration acceptable: {duration:.1f}s")
+                
+            # Check for overlapping clips
+            timestamp_pair = (suggestion.start_time, suggestion.end_time)
+            if timestamp_pair in used_timestamps:
+                print(f"❌ Skipping clip: Duplicate timestamp pair {suggestion.start_time:.1f}s - {suggestion.end_time:.1f}s")
+                continue
+                
+            # Enhance description for better engagement
+            print("\nChecking description engagement...")
+            engagement_markers = ['?', 'agree', 'think', 'debate', 'discuss', 'share', 'opinion', 'controversial', 'surprising']
+            provocative_markers = ['🔥', '💡', '🤔', '👀', '💪', '🚀']
+            
+            has_engagement = any(marker in suggestion.description.lower() for marker in engagement_markers)
+            has_emoji = any(marker in suggestion.description for marker in provocative_markers)
+            
+            if not has_engagement or not has_emoji:
+                print("Enhancing description engagement...")
+                if not has_emoji:
+                    suggestion.description = f"🔥 {suggestion.description}"
+                if not has_engagement:
+                    suggestion.description += " What's your take on this? Share your thoughts! 💭"
+                print(f"✓ Enhanced description: {suggestion.description}")
+            else:
+                print("✓ Description already engaging")
+                
+            # Enhance hashtags for better reach
+            print("\nEnhancing hashtags...")
+            current_hashtags = suggestion.hashtags.split()
+            
+            # Get top topics by importance
+            top_topics = sorted(context.get('topics', []), key=lambda x: x.get('importance', 0), reverse=True)[:3]
+            topic_hashtags = [f"#{topic['name'].replace(' ', '')}" for topic in top_topics]
+            
+            # Add trending and topic-specific hashtags
+            trending_hashtags = ['#TrendingNow', '#MustWatch', '#Innovation']
+            platform_hashtags = {
+                'LinkedIn': ['#Leadership', '#Innovation', '#FutureOfWork', '#ProfessionalDevelopment'],
+                'YouTube': ['#Tutorial', '#HowTo', '#LearnOnYouTube', '#Education']
+            }
+            
+            # Combine all hashtags and ensure uniqueness
+            all_hashtags = set(current_hashtags + topic_hashtags + trending_hashtags + platform_hashtags.get(suggestion.platform, []))
+            
+            # Select top 8 hashtags, prioritizing topic and platform-specific ones
+            final_hashtags = (topic_hashtags +
+                            platform_hashtags.get(suggestion.platform, [])[:2] +
+                            list(all_hashtags))[:8]
+            
+            suggestion.hashtags = ' '.join(sorted(set(final_hashtags)))  # Remove any duplicates
+            print(f"✓ Enhanced hashtags: {suggestion.hashtags}")
+                
+            print(f"✓ Valid clip: {suggestion.start_time:.1f}s - {suggestion.end_time:.1f}s")
+            used_timestamps.add(timestamp_pair)
+            valid_suggestions.append(suggestion)
+            
+        print(f"Found {len(valid_suggestions)} valid social clip suggestions")
+        return valid_suggestions
+    except Exception as e:
+        print(f"Error generating social clips: {e}")
+        return []
 
 @app.post("/api/chat")
 async def chat_with_videos(request: ChatRequest):

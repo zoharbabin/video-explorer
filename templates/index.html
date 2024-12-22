@@ -285,6 +285,13 @@
                                         </svg>
                                         Key Moments
                                     </button>
+                                    <button class="tab-btn" data-tab="social-clips" aria-label="View Social Clips">
+                                        <svg width="16" height="16" viewBox="0 0 16 16" style="margin-right: 4px">
+                                            <path d="M8 1.5a6.5 6.5 0 100 13 6.5 6.5 0 000-13zM0 8a8 8 0 1116 0A8 8 0 010 8z" fill="currentColor"/>
+                                            <path d="M8 3.5a.5.5 0 01.5.5v4.5h3a.5.5 0 010 1h-4a.5.5 0 01-.5-.5V4a.5.5 0 01.5-.5z" fill="currentColor"/>
+                                        </svg>
+                                        Social Clips
+                                    </button>
                                 </nav>
                                 <div class="tab-content">
                                     ${content}
@@ -371,24 +378,20 @@
                 }
             });
 
-            // Handle segment clicks and video player
-            analysisResults.addEventListener('click', (e) => {
-                const segmentEntry = e.target.closest('.segment-entry');
-                if (!segmentEntry) return;
+            // Preview clip function
+            window.previewClip = function(startTime, endTime) {
+                const firstVideoEl = document.querySelector('#video-list article.selected');
+                if (!firstVideoEl) return;
+                
+                const videoId = firstVideoEl.dataset.videoId;
+                const playerContainer = document.querySelector('.segments-player');
+                if (!playerContainer) return;
 
-                // Update active state
-                if (activeSegment) {
-                    activeSegment.classList.remove('active');
-                }
-                segmentEntry.classList.add('active');
-                activeSegment = segmentEntry;
+                createVideoPlayer(videoId, startTime, endTime, playerContainer);
+            }
 
-                // Get segment data
-                const videoId = segmentEntry.dataset.videoId;
-                const startTime = parseFloat(segmentEntry.dataset.startTime);
-                const endTime = parseFloat(segmentEntry.dataset.endTime);
-
-                // Create player iframe
+            // Function to create and show video player
+            function createVideoPlayer(videoId, startTime, endTime, container) {
                 const playerUrl = new URL(`${kalturaConfig.baseUrl}/p/${kalturaConfig.partnerId}/embedPlaykitJs/uiconf_id/${kalturaConfig.uiconfId}`);
                 playerUrl.searchParams.set('iframeembed', 'true');
                 playerUrl.searchParams.set('entry_id', videoId);
@@ -404,11 +407,42 @@
                 iframe.setAttribute('allow', 'autoplay *; fullscreen *; encrypted-media *');
                 iframe.setAttribute('frameborder', '0');
 
-                // Show player in the dedicated player area
+                container.innerHTML = '';
+                container.appendChild(iframe);
+                container.classList.add('active');
+            }
+
+            // Preview clip function
+            function previewClip(startTime, endTime) {
+                const firstVideoEl = document.querySelector('#video-list article.selected');
+                if (!firstVideoEl) return;
+                
+                const videoId = firstVideoEl.dataset.videoId;
+                const playerContainer = document.querySelector('.segments-player');
+                if (!playerContainer) return;
+
+                createVideoPlayer(videoId, startTime, endTime, playerContainer);
+            }
+
+            // Handle segment clicks and video player
+            analysisResults.addEventListener('click', (e) => {
+                const segmentEntry = e.target.closest('.segment-entry');
+                if (!segmentEntry) return;
+
+                // Update active state
+                if (activeSegment) {
+                    activeSegment.classList.remove('active');
+                }
+                segmentEntry.classList.add('active');
+                activeSegment = segmentEntry;
+
+                // Get segment data and create player
+                const videoId = segmentEntry.dataset.videoId;
+                const startTime = parseFloat(segmentEntry.dataset.startTime);
+                const endTime = parseFloat(segmentEntry.dataset.endTime);
                 const playerContainer = segmentEntry.closest('.segments').querySelector('.segments-player');
-                playerContainer.innerHTML = '';
-                playerContainer.appendChild(iframe);
-                playerContainer.classList.add('active');
+                
+                createVideoPlayer(videoId, startTime, endTime, playerContainer);
             });
 
             // Handle tab navigation
@@ -680,6 +714,36 @@
                 return commonWords >= 2;
             }
 
+            // Format social clips with platform badges and preview buttons
+            const formatSocialClips = (clips) => {
+                if (!Array.isArray(clips) || clips.length === 0) {
+                    return `<div class="no-clips-message">
+                        <p>No social clip suggestions available for this video.</p>
+                        <p>Try analyzing longer videos to get clip suggestions.</p>
+                    </div>`;
+                }
+
+                return clips.map(clip => {
+                    const startTime = formatDuration(clip.start_time);
+                    const endTime = formatDuration(clip.end_time);
+                    const platformClass = clip.platform.toLowerCase();
+                    
+                    return `
+                        <div class="social-clip-card" data-start-time="${clip.start_time}" data-end-time="${clip.end_time}">
+                            <div class="platform-badge ${platformClass}">${clip.platform}</div>
+                            <div class="clip-time">${startTime} - ${endTime}</div>
+                            <div class="clip-content">
+                                <div class="clip-description">${clip.description}</div>
+                                <div class="clip-hashtags">${clip.hashtags}</div>
+                            </div>
+                            <button class="preview-clip-btn" onclick="previewClip(${clip.start_time}, ${clip.end_time})">
+                                Preview Clip
+                            </button>
+                        </div>
+                    `;
+                }).join('');
+            };
+
             return `
                 <div class="tab-panel active" data-tab="summary">
                     <div class="summary">
@@ -702,6 +766,11 @@
                             ${formatSegments(analysis.timestamps) || ''}
                         </div>
                         <div class="segments-player"></div>
+                    </div>
+                </div>
+                <div class="tab-panel" data-tab="social-clips">
+                    <div class="social-clips">
+                        ${formatSocialClips(analysis.social_clips) || ''}
                     </div>
                 </div>
             `;
