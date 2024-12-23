@@ -426,7 +426,7 @@ async def process_video(video_id: str, task_id: str, total_videos: int) -> dict:
         if not transcript_chunks:
             return create_error_result(video_id, "No readable transcript content")
 
-        video_info = kaltura.client.media.get(video_id)
+        video_info = kaltura.client.media.get(video_id) # pylint: disable=no-member
         video_duration = float(video_info.duration)
 
         chunk_analyses = await process_video_chunks(transcript_chunks)
