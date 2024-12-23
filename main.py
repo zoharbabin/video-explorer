@@ -58,11 +58,11 @@ templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "t
 # Configuration values
 KALTURA_SESSION_DURATION = int(os.getenv('KALTURA_SESSION_DURATION', '86400'))
 PAGE_SIZE = int(os.getenv('PAGE_SIZE', '10'))
+MODEL_ID = os.getenv('MODEL_ID', 'anthropic.claude-3-5-sonnet-20241022-v2:0')
 MODEL_TIMEOUT = int(os.getenv('MODEL_TIMEOUT', '60'))
 MODEL_MAX_TOKENS = int(os.getenv('MODEL_MAX_TOKENS', '4000'))
 MODEL_CHUNK_SIZE = int(os.getenv('MODEL_CHUNK_SIZE', '24000'))
 MODEL_TEMPERATURE = float(os.getenv('MODEL_TEMPERATURE', '0'))
-MODEL_ID = os.getenv('MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0')
 
 # Initialize clients
 kaltura = KalturaUtils(
@@ -528,16 +528,39 @@ async def generate_social_post(video_id: str, moment_id: int):
         
         moment = analysis["timestamps"][moment_id]
         
-        # Generate thumbnails for the segment
-        thumbnails = []
-        duration = moment.end_timestamp - moment.start_timestamp
-        for i in range(3):  # Get 3 thumbnails spread across the segment
-            time_point = moment.start_timestamp + (duration * i / 2)
-            thumbnail_url = f"https://cfvod.kaltura.com/p/{kaltura.partner_id}/sp/{kaltura.partner_id}00/thumbnail/entry_id/{video_id}/width/320/vid_sec/{time_point}"
-            thumbnails.append(thumbnail_url)
+        def encode_image_from_url(url: str) -> str:
+            """Download image from URL and encode as base64"""
+            import base64
+            import requests
+            
+            response = requests.get(url)
+            response.raise_for_status()
+            return base64.b64encode(response.content).decode("utf-8")
 
-        # Create prompt for social post generation
-        prompt = f"""Generate an engaging social media post for this video segment.
+        try:
+            # Generate thumbnail URL for middle of segment
+            duration = moment.end_timestamp - moment.start_timestamp
+            time_point = moment.start_timestamp + (duration / 2)  # Middle of segment
+            
+            # Get Kaltura session for thumbnail auth
+            ks = kaltura.client.getKs()
+            thumbnail_url = (
+                f"https://cfvod.kaltura.com/p/{kaltura.partner_id}"
+                f"/sp/{kaltura.partner_id}00/thumbnail/entry_id/{video_id}"
+                f"/width/320/vid_sec/{time_point}/ks/{ks}"
+            )
+
+            # Download and encode thumbnail
+            base64_image = encode_image_from_url(thumbnail_url)
+
+            # Create messages array with text and encoded image
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": f"""Generate an engaging social media post for this video segment.
 
 SEGMENT DETAILS:
 - Topic: {moment.topic}
@@ -557,15 +580,45 @@ Instructions:
 6. Target both LinkedIn and Twitter platforms
 
 Return as SocialPost object."""
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/jpeg;base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ]
 
-        # Generate post using LLM
-        response = await asyncio.to_thread(
-            llm_client.chat.completions.create,
-            model=MODEL_ID,
-            response_model=SocialPost,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=MODEL_TEMPERATURE
-        )
+            # Generate post using LLM with timeout
+            response = await asyncio.wait_for(
+                asyncio.to_thread(
+                    llm_client.chat.completions.create,
+                    model=MODEL_ID,
+                    response_model=SocialPost,
+                    messages=messages,
+                    temperature=MODEL_TEMPERATURE
+                ),
+                timeout=30  # 30 second timeout
+            )
+
+            # Add thumbnail URL to response for UI display
+            response.thumbnails = [thumbnail_url]
+            return response
+
+        except asyncio.TimeoutError:
+            logger.error("LLM request timed out while generating social post")
+            return {
+                "error": "Request timed out. Please try again.",
+                "thumbnails": [thumbnail_url]
+            }
+        except Exception as e:
+            logger.error("Error generating social post: %s", str(e), exc_info=True)
+            return {
+                "error": f"Failed to generate post: {str(e)}",
+                "thumbnails": [thumbnail_url]
+            }
 
         # Add thumbnails to response
         response.thumbnails = thumbnails
