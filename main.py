@@ -3,7 +3,9 @@ import json
 import time
 import asyncio
 import logging
+import base64
 from typing import List, Optional, Dict
+import requests
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
@@ -530,10 +532,7 @@ async def generate_social_post(video_id: str, moment_id: int):
         
         def encode_image_from_url(url: str) -> str:
             """Download image from URL and encode as base64"""
-            import base64
-            import requests
-            
-            response = requests.get(url)
+            response = requests.get(url, timeout=10)
             response.raise_for_status()
             return base64.b64encode(response.content).decode("utf-8")
 
@@ -543,7 +542,7 @@ async def generate_social_post(video_id: str, moment_id: int):
             time_point = moment.start_timestamp + (duration / 2)  # Middle of segment
             
             # Get Kaltura session for thumbnail auth
-            ks = kaltura.client.getKs()
+            ks = kaltura.client.getKs() # pylint: disable=no-member
             thumbnail_url = (
                 f"https://cfvod.kaltura.com/p/{kaltura.partner_id}"
                 f"/sp/{kaltura.partner_id}00/thumbnail/entry_id/{video_id}"
@@ -613,17 +612,12 @@ Return as SocialPost object."""
                 "error": "Request timed out. Please try again.",
                 "thumbnails": [thumbnail_url]
             }
-        except Exception as e:
+        except (requests.RequestException, ValueError, TypeError) as e:
             logger.error("Error generating social post: %s", str(e), exc_info=True)
             return {
                 "error": f"Failed to generate post: {str(e)}",
                 "thumbnails": [thumbnail_url]
             }
-
-        # Add thumbnails to response
-        response.thumbnails = thumbnails
-        
-        return response
 
     except (KalturaException, ValueError, TypeError, RuntimeError) as e:
         logger.error("Error generating social post: %s", str(e), exc_info=True)
