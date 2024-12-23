@@ -103,16 +103,6 @@ class ChatRequest(BaseModel):
     question: str
     context: List[dict]
 
-class SocialClipSuggestion(BaseModel):
-    start_time: float = Field(description="Start time in seconds")
-    end_time: float = Field(description="End time in seconds")
-    description: str = Field(description="Social media post description")
-    hashtags: str = Field(description="Suggested hashtags")
-    platform: str = Field(description="Target platform")
-
-class SocialClipsResponse(BaseModel):
-    suggestions: List[SocialClipSuggestion]
-
 def init_kaltura_session() -> bool:
     """Initialize Kaltura session"""
     success, pid = kaltura.init_session()
@@ -435,9 +425,6 @@ async def process_video(video_id: str, task_id: str, total_videos: int) -> dict:
         timestamps = await generate_timestamps(transcript_chunks, video_duration)
         final_analysis["timestamps"] = timestamps
 
-        social_clips = await generate_social_clips(final_analysis)
-        final_analysis["social_clips"] = social_clips
-
         result = {"video_id": video_id, "analysis": final_analysis}
         analysis_cache[video_id] = result
         analysis_progress[task_id] = min(((len(analysis_cache) + 1) / total_videos) * 100, 99)
@@ -519,161 +506,6 @@ Format as VideoAnalysis object."""
             topics=[{"name": "<ERROR>", "importance": 1}],
             timestamps=[]
         )
-
-def format_moments(moments: List[dict]) -> List[dict]:
-    """Format timestamp moments for social clips"""
-    formatted = []
-    for moment in moments:
-        if isinstance(moment, dict):
-            if all(k in moment for k in ['start_timestamp', 'end_timestamp', 'description', 'topic', 'importance']):
-                formatted.append(moment)
-        elif isinstance(moment, TimestampEntry):
-            formatted.append({
-                'start_timestamp': moment.start_timestamp,
-                'end_timestamp': moment.end_timestamp,
-                'description': moment.description,
-                'topic': moment.topic,
-                'importance': moment.importance
-            })
-        elif all(hasattr(moment, attr) for attr in ['start_timestamp', 'end_timestamp', 'description', 'topic', 'importance']):
-            formatted.append({
-                'start_timestamp': getattr(moment, 'start_timestamp'),
-                'end_timestamp': getattr(moment, 'end_timestamp'),
-                'description': getattr(moment, 'description'),
-                'topic': getattr(moment, 'topic'),
-                'importance': getattr(moment, 'importance')
-            })
-    return formatted
-
-def format_topics(topics: List[dict]) -> List[dict]:
-    """Format topics for social clips"""
-    formatted = []
-    for topic in topics:
-        if isinstance(topic, dict):
-            formatted.append(topic)
-        else:
-            formatted.append({
-                'name': topic.name if hasattr(topic, 'name') else str(topic),
-                'importance': topic.importance if hasattr(topic, 'importance') else 3
-            })
-    return formatted
-
-def create_social_clips_prompt(moments: List[dict], topics: List[dict], context: dict) -> str:
-    """Create prompt for social clips generation"""
-    return f"""Generate viral-worthy clips from video content.
-
-AVAILABLE TIMESTAMPS:
-{json.dumps(moments, indent=2)}
-
-TOPICS:
-{json.dumps(topics, indent=2)}
-
-VIDEO CONTEXT:
-{json.dumps({k: v for k, v in context.items() if k in ['summary', 'insights']}, indent=2)}
-
-Instructions:
-1. Identify 3-4 engaging clips (30-300 seconds)
-2. Focus on controversial/debate-worthy content
-3. Include provocative descriptions
-4. Use trending hashtags
-5. Target LinkedIn and YouTube platforms
-
-Return as SocialClipsResponse."""
-
-async def get_social_clips_response(prompt: str) -> Optional[SocialClipsResponse]:
-    """Get social clips response from LLM"""
-    try:
-        return await asyncio.to_thread(
-            llm_client.chat.completions.create,
-            model=MODEL_ID,
-            response_model=SocialClipsResponse,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=MODEL_TEMPERATURE
-        )
-    except (asyncio.TimeoutError, ValueError, TypeError, RuntimeError) as e:
-        logger.error("Error getting social clips response: %s", e, exc_info=True)
-        return None
-
-def validate_social_clips(suggestions: List[SocialClipSuggestion], context: dict) -> List[SocialClipSuggestion]:
-    """Validate and enhance social clip suggestions"""
-    valid_suggestions = []
-    used_timestamps = set()
-
-    for suggestion in suggestions:
-        # Find matching timestamp
-        best_match = None
-        min_diff = float('inf')
-        
-        for moment in context.get('timestamps', []):
-            moment_start = moment.start_timestamp if hasattr(moment, 'start_timestamp') else moment.get('start_timestamp', 0)
-            moment_end = moment.end_timestamp if hasattr(moment, 'end_timestamp') else moment.get('end_timestamp', 0)
-            
-            total_diff = abs(suggestion.start_time - moment_start) + abs(suggestion.end_time - moment_end)
-            if total_diff < min_diff:
-                min_diff = total_diff
-                best_match = moment
-
-        # Validate clip
-        if best_match and min_diff <= 60:
-            suggestion.start_time = best_match.start_timestamp if hasattr(best_match, 'start_timestamp') else best_match.get('start_timestamp')
-            suggestion.end_time = best_match.end_timestamp if hasattr(best_match, 'end_timestamp') else best_match.get('end_timestamp')
-            
-            duration = suggestion.end_time - suggestion.start_time
-            if 20 <= duration <= 300:
-                timestamp_pair = (suggestion.start_time, suggestion.end_time)
-                if timestamp_pair not in used_timestamps:
-                    used_timestamps.add(timestamp_pair)
-                    enhance_social_clip(suggestion, context)
-                    valid_suggestions.append(suggestion)
-
-    return valid_suggestions
-
-def enhance_social_clip(suggestion: SocialClipSuggestion, context: dict):
-    """Enhance social clip with better engagement features"""
-    # Add emoji if missing
-    if not any(emoji in suggestion.description for emoji in ['🔥', '💡', '🤔', '👀', '💪', '🚀']):
-        suggestion.description = f"🔥 {suggestion.description}"
-
-    # Add engagement prompt if missing
-    if not any(marker in suggestion.description.lower() for marker in ['?', 'agree', 'think', 'debate', 'discuss']):
-        suggestion.description += " What's your take on this? Share your thoughts! 💭"
-
-    # Enhance hashtags
-    current_hashtags = suggestion.hashtags.split()
-    top_topics = sorted(context.get('topics', []), key=lambda x: x.get('importance', 0), reverse=True)[:3]
-    topic_hashtags = [f"#{topic['name'].replace(' ', '')}" for topic in top_topics]
-    
-    platform_hashtags = {
-        'LinkedIn': ['#Leadership', '#Innovation', '#FutureOfWork'],
-        'YouTube': ['#Tutorial', '#HowTo', '#LearnOnYouTube']
-    }
-    
-    all_hashtags = set(current_hashtags + topic_hashtags + platform_hashtags.get(suggestion.platform, []))
-    suggestion.hashtags = ' '.join(sorted(list(all_hashtags)[:8]))
-
-async def generate_social_clips(context: dict) -> List[SocialClipSuggestion]:
-    """Generate social media clip suggestions"""
-    try:
-        key_moments = context.get('timestamps', [])
-        if not key_moments:
-            return []
-
-        formatted_moments = format_moments(key_moments)
-        if not formatted_moments:
-            return []
-
-        topics = format_topics(context.get('topics', []))
-        prompt = create_social_clips_prompt(formatted_moments, topics, context)
-        
-        response = await get_social_clips_response(prompt)
-        if not response or not response.suggestions:
-            return []
-            
-        return validate_social_clips(response.suggestions, context)
-
-    except (ValueError, TypeError, RuntimeError) as e:
-        logger.error("Error generating social clips: %s", e, exc_info=True)
-        return []
 
 @app.post("/api/generate-social-post/{video_id}")
 async def generate_social_post(video_id: str, moment_id: int):
