@@ -572,7 +572,7 @@ Return as SocialPost object."""
         
         return response
 
-    except Exception as e:
+    except (KalturaException, ValueError, TypeError, RuntimeError) as e:
         logger.error("Error generating social post: %s", str(e), exc_info=True)
         return {"error": str(e)}
 
