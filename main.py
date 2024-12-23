@@ -4,7 +4,7 @@ import time
 import asyncio
 import logging
 from typing import List, Optional, Dict
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -82,6 +82,13 @@ class TimestampEntry(BaseModel):
     description: str = Field(description="Description of what occurs at this timestamp")
     topic: str = Field(description="Main topic being discussed at this timestamp")
     importance: int = Field(description="Importance level (1-5)", ge=1, le=5)
+    thumbnails: Optional[List[str]] = Field(default=None, description="List of thumbnail URLs for this segment")
+
+class SocialPost(BaseModel):
+    text: str = Field(description="The social media post text")
+    hashtags: str = Field(description="Space-separated hashtags")
+    platform: str = Field(description="Target platform (LinkedIn/Twitter)")
+    thumbnails: List[str] = Field(description="List of thumbnail URLs to include")
 
 class VideoAnalysis(BaseModel):
     summary: str = Field(description="A comprehensive summary of the video content")
@@ -667,6 +674,75 @@ async def generate_social_clips(context: dict) -> List[SocialClipSuggestion]:
     except (ValueError, TypeError, RuntimeError) as e:
         logger.error("Error generating social clips: %s", e, exc_info=True)
         return []
+
+@app.post("/api/generate-social-post/{video_id}")
+async def generate_social_post(video_id: str, moment_id: int):
+    """Generate a social media post for a specific key moment"""
+    try:
+        if not init_kaltura_session():
+            return {"error": "Failed to initialize Kaltura session"}
+
+        # Get video info and analysis from cache
+        if video_id not in analysis_cache:
+            return {"error": "Video analysis not found"}
+
+        analysis = analysis_cache[video_id]["analysis"]
+        if not analysis["timestamps"]:
+            return {"error": "No key moments found"}
+
+        # Get the specific moment
+        if moment_id >= len(analysis["timestamps"]):
+            return {"error": "Invalid moment ID"}
+        
+        moment = analysis["timestamps"][moment_id]
+        
+        # Generate thumbnails for the segment
+        thumbnails = []
+        duration = moment.end_timestamp - moment.start_timestamp
+        for i in range(3):  # Get 3 thumbnails spread across the segment
+            time_point = moment.start_timestamp + (duration * i / 2)
+            thumbnail_url = f"https://cfvod.kaltura.com/p/{kaltura.partner_id}/sp/{kaltura.partner_id}00/thumbnail/entry_id/{video_id}/width/320/vid_sec/{time_point}"
+            thumbnails.append(thumbnail_url)
+
+        # Create prompt for social post generation
+        prompt = f"""Generate an engaging social media post for this video segment.
+
+SEGMENT DETAILS:
+- Topic: {moment.topic}
+- Description: {moment.description}
+- Duration: {duration:.1f} seconds
+- Importance: {moment.importance}/5
+
+VIDEO CONTEXT:
+{json.dumps({k: v for k, v in analysis.items() if k in ['summary', 'insights']}, indent=2)}
+
+Instructions:
+1. Create a compelling, attention-grabbing post
+2. Focus on encouraging discussion and engagement
+3. Use appropriate emojis for emphasis
+4. Include relevant hashtags
+5. Optimize for maximum reach and interaction
+6. Target both LinkedIn and Twitter platforms
+
+Return as SocialPost object."""
+
+        # Generate post using LLM
+        response = await asyncio.to_thread(
+            llm_client.chat.completions.create,
+            model=MODEL_ID,
+            response_model=SocialPost,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=MODEL_TEMPERATURE
+        )
+
+        # Add thumbnails to response
+        response.thumbnails = thumbnails
+        
+        return response
+
+    except Exception as e:
+        logger.error("Error generating social post: %s", str(e), exc_info=True)
+        return {"error": str(e)}
 
 @app.post("/api/chat")
 async def chat_with_videos(request: ChatRequest):
