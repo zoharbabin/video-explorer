@@ -79,27 +79,32 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h3>Share This Moment</h3>
-                <button class="close-modal">&times;</button>
+                <button class="close-modal" id="close-share-modal">&times;</button>
             </div>
             <div class="modal-body">
                 <div class="thumbnails-preview"></div>
                 <div class="post-content">
+                    <!-- Error container + Retry button (hidden by default) -->
+                    <div id="share-error" class="error" style="display: none;"></div>
                     <textarea id="post-text" rows="4" placeholder="Loading post content..."></textarea>
                     <div class="hashtags"></div>
                 </div>
                 <div class="platform-buttons">
-                    <button class="platform-btn linkedin">
+                    <button class="platform-btn linkedin" id="linkedin-share-btn" disabled>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M19 3a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h14m-.5 15.5v-5.3a3.26 3.26 0 0 0-3.26-3.26c-.85 0-1.84.52-2.32 1.3v-1.11h-2.79v8.37h2.79v-4.93c0-.77.62-1.4 1.39-1.4a1.4 1.4 0 0 1 1.4 1.4v4.93h2.79M6.88 8.56a1.68 1.68 0 0 0 1.68-1.68c0-.93-.75-1.69-1.68-1.69a1.69 1.69 0 0 0-1.69 1.69c0 .93.76 1.68 1.69 1.68m1.39 9.94v-8.37H5.5v8.37h2.77z"/>
                         </svg>
                         Share on LinkedIn
                     </button>
-                    <button class="platform-btn x">
+                    <button class="platform-btn x" id="x-share-btn" disabled>
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
                             <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
                         </svg>
                         Share on X
                     </button>
+                </div>
+                <div style="margin-top: 1rem;">
+                    <button id="reload-post-data-btn" style="display: none;">Retry Loading Post Data</button>
                 </div>
             </div>
         </div>
@@ -117,13 +122,15 @@
         const $ = (selector) => document.querySelector(selector);
         const show = (el) => el.style.display = 'block';
         const hide = (el) => el.style.display = 'none';
-    
+
         // Store analysis results for chat context
         let analysisContext = [];
         let selectedVideos = new Set();
         let activeSegment = null;
 
-        // Search videos
+        /***************************************
+         *             SEARCH LOGIC
+         ***************************************/
         $('#search-btn').addEventListener('click', async () => {
             const categoryId = $('#category-id').value;
             const query = $('#search-query').value;
@@ -179,6 +186,9 @@
             }
         });
 
+        /***************************************
+         *      VIDEO SELECTION & ANALYSIS
+         ***************************************/
         // Handle video selection
         $('#video-list').addEventListener('click', (event) => {
             const article = event.target.closest('article');
@@ -275,35 +285,22 @@
             console.log('Displaying analysis for:', results);
             
             if (!Array.isArray(results)) {
-                console.log('Converting single result to array');
                 results = [results];
             }
 
-            const analysisHtml = results.map((result, index) => {
-                console.log('Processing result:', result);
-                
-                // Extract analysis and video_id from result
+            const analysisHtml = results.map((result) => {
+                // Extract analysis and video_id
                 const analysis = result.analysis || result;
                 const videoId = result.video_id;
                 
-                if (!analysis) {
-                    console.error('No analysis data in result:', result);
-                    return '';
-                }
-
-                // Extract content from the analysis
-                let content;
-                if (typeof analysis === 'string') {
-                    // If analysis is a string, use it directly
-                    content = analysis;
-                } else {
-                    // Otherwise, format the object with video_id
-                    content = formatAnalysis(analysis, videoId);
-                }
-
+                if (!analysis) return '';
+                
                 // Get the video title from the selected videos
-                const videoEl = document.querySelector(`#video-list article[data-video-id="${result.video_id || ''}"]`);
-                const videoTitle = videoEl ? videoEl.querySelector('h3').textContent : `Video Analysis ${result.video_id || ''}`;
+                const videoEl = document.querySelector(`#video-list article[data-video-id="${videoId || ''}"]`);
+                const videoTitle = videoEl
+                    ? videoEl.querySelector('h3').textContent
+                    : `Video Analysis ${videoId || ''}`;
+                
                 return `
                     <article class="analysis-accordion">
                         <header class="analysis-header">
@@ -343,48 +340,145 @@
                                     </button>
                                 </nav>
                                 <div class="tab-content">
-                                    ${content}
+                                    ${typeof analysis === 'string'
+                                        ? analysis
+                                        : formatAnalysis(analysis, videoId)}
                                 </div>
                             </div>
                         </div>
                     </article>
                 `;
-            }).filter(html => html).join('');
+            }).filter(Boolean).join('');
             
             $('#analysis-results').innerHTML = analysisHtml || '<p>No analysis results available.</p>';
-            
-            // Setup accordion and tab functionality
             setupAnalysisInteractions();
         }
 
-        // Format analysis data
-        function formatAnalysis(analysis) {
-            console.log('Formatting analysis:', analysis);
+        /***************************************
+         *        ANALYSIS INTERACTIONS
+         ***************************************/
+        function setupAnalysisInteractions() {
+            const analysisResults = $('#analysis-results');
             
-            if (!analysis) return 'No analysis data available.';
+            // Accordion toggles
+            analysisResults.addEventListener('click', (e) => {
+                const header = e.target.closest('.analysis-header');
+                if (header) {
+                    const accordion = header.closest('.analysis-accordion');
+                    accordion.classList.toggle('expanded');
+                }
+            });
 
-            // Handle string response
-            if (typeof analysis === 'string') return analysis;
+            // Create video player
+            function createVideoPlayer(videoId, startTime, endTime, container) {
+                const playerUrl = new URL(`${kalturaConfig.baseUrl}/p/${kalturaConfig.partnerId}/embedPlaykitJs/uiconf_id/${kalturaConfig.uiconfId}`);
+                playerUrl.searchParams.set('iframeembed', 'true');
+                playerUrl.searchParams.set('entry_id', videoId);
+                playerUrl.searchParams.set('kalturaSeekFrom', Math.floor(startTime));
+                playerUrl.searchParams.set('kalturaClipTo', Math.floor(endTime));
+                // Additional params if desired:
+                // playerUrl.searchParams.set('autoPlay', 'true');
 
-            // Handle object response
-            const sections = {
-                summary: 'Summary',
-                insights: 'Key Insights',
-                topics: 'Main Topics',
-                segments: 'Key Segments'
-            };
+                const iframe = document.createElement('iframe');
+                iframe.src = playerUrl.toString();
+                iframe.setAttribute('allowfullscreen', '');
+                iframe.setAttribute('webkitallowfullscreen', '');
+                iframe.setAttribute('mozAllowFullScreen', '');
+                iframe.setAttribute('allow', 'autoplay *; fullscreen *; encrypted-media *');
+                iframe.setAttribute('frameborder', '0');
 
-            return Object.entries(sections)
-                .map(([key, title]) => `
-                    <div class="${key}">
-                        <h4>${title}</h4>
-                        <p>${analysis[key] || `No ${title.toLowerCase()} available.`}</p>
-                    </div>
-                `)
-                .join('');
+                container.innerHTML = '';
+                container.appendChild(iframe);
+                container.classList.add('active');
+            }
+
+            // Preview clip button
+            analysisResults.addEventListener('click', (e) => {
+                const previewBtn = e.target.closest('.preview-clip-btn');
+                if (!previewBtn) return;
+
+                const entry = previewBtn.closest('[data-video-id]');
+                if (!entry) return;
+
+                const videoId = entry.dataset.videoId;
+                const startTime = parseFloat(entry.dataset.startTime);
+                const endTime = parseFloat(entry.dataset.endTime);
+                const container = entry.closest('.segments, .social-clips');
+                const playerContainer = container.querySelector('.segments-player');
+
+                createVideoPlayer(videoId, startTime, endTime, playerContainer);
+            });
+
+            // Segment entry clicks
+            analysisResults.addEventListener('click', (e) => {
+                const segmentEntry = e.target.closest('.segments .segment-entry');
+                if (!segmentEntry) return;
+
+                // Check if we're clicking the same segment
+                if (activeSegment === segmentEntry) {
+                    return;
+                }
+
+                if (activeSegment) {
+                    activeSegment.classList.remove('active');
+                }
+                segmentEntry.classList.add('active');
+                activeSegment = segmentEntry;
+
+                const videoId = segmentEntry.dataset.videoId;
+                const startTime = parseFloat(segmentEntry.dataset.startTime);
+                const endTime = parseFloat(segmentEntry.dataset.endTime);
+                const playerContainer = segmentEntry.closest('.segments').querySelector('.segments-player');
+
+                createVideoPlayer(videoId, startTime, endTime, playerContainer);
+            });
+
+            // Topics and insights -> auto-chat
+            analysisResults.addEventListener('click', (e) => {
+                const topic = e.target.closest('.clickable-topic');
+                if (topic) {
+                    const text = topic.textContent.trim();
+                    $('#chat-input').value = `Elaborate more about this topic: ${text}`;
+                    $('#chat-btn').click();
+                    return;
+                }
+
+                const insight = e.target.closest('.clickable-insight');
+                if (insight) {
+                    const text = insight.textContent.trim();
+                    $('#chat-input').value = `Elaborate more about this key takeaway: ${text}`;
+                    $('#chat-btn').click();
+                    return;
+                }
+            });
+
+            // Tab navigation
+            analysisResults.addEventListener('click', (e) => {
+                const tabBtn = e.target.closest('.tab-btn');
+                if (!tabBtn) return;
+
+                const tabContainer = tabBtn.closest('.tab-container');
+                const targetTab = tabBtn.dataset.tab;
+                
+                tabContainer.querySelectorAll('.tab-btn').forEach(btn => {
+                    btn.classList.toggle('active', btn === tabBtn);
+                });
+                
+                tabContainer.querySelectorAll('.tab-panel').forEach(panel => {
+                    panel.classList.toggle('active', panel.dataset.tab === targetTab);
+                });
+            });
+
+            // Expand first analysis by default
+            const firstAnalysis = analysisResults.querySelector('.analysis-accordion');
+            if (firstAnalysis) {
+                firstAnalysis.classList.add('expanded');
+            }
         }
 
-        // Chat functionality
+        /***************************************
+         *           CHAT FUNCTIONALITY
+         ***************************************/
         $('#chat-btn').addEventListener('click', async () => {
             const question = $('#chat-input').value.trim();
             if (!question) return;
@@ -414,133 +508,10 @@
             }
         });
 
-        // Setup analysis interactions
-        function setupAnalysisInteractions() {
-            const analysisResults = $('#analysis-results');
-            
-            // Handle accordion toggles
-            analysisResults.addEventListener('click', (e) => {
-                const header = e.target.closest('.analysis-header');
-                if (header) {
-                    const accordion = header.closest('.analysis-accordion');
-                    accordion.classList.toggle('expanded');
-                }
-            });
-
-            // Function to create and show video player
-            function createVideoPlayer(videoId, startTime, endTime, container) {
-                const playerUrl = new URL(`${kalturaConfig.baseUrl}/p/${kalturaConfig.partnerId}/embedPlaykitJs/uiconf_id/${kalturaConfig.uiconfId}`);
-                playerUrl.searchParams.set('iframeembed', 'true');
-                playerUrl.searchParams.set('entry_id', videoId);
-                playerUrl.searchParams.set('kalturaSeekFrom', Math.floor(startTime));
-                playerUrl.searchParams.set('kalturaClipTo', Math.floor(endTime));
-                //playerUrl.searchParams.set('kalturaStartTime', Math.floor(startTime));
-                //playerUrl.searchParams.set('autoPlay', 'true');
-
-                const iframe = document.createElement('iframe');
-                iframe.src = playerUrl.toString();
-                iframe.setAttribute('allowfullscreen', '');
-                iframe.setAttribute('webkitallowfullscreen', '');
-                iframe.setAttribute('mozAllowFullScreen', '');
-                iframe.setAttribute('allow', 'autoplay *; fullscreen *; encrypted-media *');
-                iframe.setAttribute('frameborder', '0');
-
-                container.innerHTML = '';
-                container.appendChild(iframe);
-                container.classList.add('active');
-            }
-
-            // Handle preview button clicks
-            analysisResults.addEventListener('click', (e) => {
-                const previewBtn = e.target.closest('.preview-clip-btn');
-                if (!previewBtn) return;
-
-                const entry = previewBtn.closest('[data-video-id]');
-                if (!entry) return;
-
-                const videoId = entry.dataset.videoId;
-                const startTime = parseFloat(entry.dataset.startTime);
-                const endTime = parseFloat(entry.dataset.endTime);
-                const container = entry.closest('.segments, .social-clips');
-                const playerContainer = container.querySelector('.segments-player');
-
-                createVideoPlayer(videoId, startTime, endTime, playerContainer);
-            });
-
-            // Handle segment entry clicks
-            analysisResults.addEventListener('click', (e) => {
-                const segmentEntry = e.target.closest('.segments .segment-entry');
-                if (!segmentEntry) return;
-
-                // Check if we're clicking the same segment that's already active
-                if (activeSegment === segmentEntry) {
-                    // Same segment clicked, no need to reload player
-                    return;
-                }
-
-                if (activeSegment) {
-                    activeSegment.classList.remove('active');
-                }
-                segmentEntry.classList.add('active');
-                activeSegment = segmentEntry;
-
-                const videoId = segmentEntry.dataset.videoId;
-                const startTime = parseFloat(segmentEntry.dataset.startTime);
-                const endTime = parseFloat(segmentEntry.dataset.endTime);
-                const playerContainer = segmentEntry.closest('.segments').querySelector('.segments-player');
-
-                createVideoPlayer(videoId, startTime, endTime, playerContainer);
-            });
-
-            // Handle clicks on topics and insights
-            analysisResults.addEventListener('click', (e) => {
-                const topic = e.target.closest('.clickable-topic');
-                if (topic) {
-                    const text = topic.textContent.trim();
-                    $('#chat-input').value = `Elaborate more about this topic: ${text}`;
-                    $('#chat-btn').click();
-                    return;
-                }
-
-                const insight = e.target.closest('.clickable-insight');
-                if (insight) {
-                    const text = insight.textContent.trim();
-                    $('#chat-input').value = `Elaborate more about this key takeaway: ${text}`;
-                    $('#chat-btn').click();
-                    return;
-                }
-            });
-
-            // Handle tab navigation
-            analysisResults.addEventListener('click', (e) => {
-                const tabBtn = e.target.closest('.tab-btn');
-                if (!tabBtn) return;
-
-                const tabContainer = tabBtn.closest('.tab-container');
-                const targetTab = tabBtn.dataset.tab;
-                
-                // Update active tab button
-                tabContainer.querySelectorAll('.tab-btn').forEach(btn => {
-                    btn.classList.toggle('active', btn === tabBtn);
-                });
-                
-                // Show selected tab panel
-                tabContainer.querySelectorAll('.tab-panel').forEach(panel => {
-                    panel.classList.toggle('active', panel.dataset.tab === targetTab);
-                });
-            });
-
-            // Expand first analysis by default
-            const firstAnalysis = analysisResults.querySelector('.analysis-accordion');
-            if (firstAnalysis) {
-                firstAnalysis.classList.add('expanded');
-            }
-        }
-
-        // Handle scroll-to-bottom button visibility
+        // Scroll-to-bottom button
         const chatMessages = $('#chat-messages');
         const scrollBottomBtn = $('#scroll-bottom');
-        
+
         chatMessages.addEventListener('scroll', () => {
             const isNearBottom = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 100;
             scrollBottomBtn.style.display = isNearBottom ? 'none' : 'flex';
@@ -563,38 +534,31 @@
         function appendMessage(sender, message) {
             const messageEl = document.createElement('article');
             messageEl.setAttribute('data-sender', sender);
-            messageEl.classList.add('summary'); // Add summary class for consistent formatting
+            messageEl.classList.add('summary');
             
-            // Format the message similar to analysis text
+            // Format the message similarly to analysis text
             const formattedMessage = message
-                // Handle headings
+                // Headings
                 .replace(/^# (.*$)/gm, '<h1>$1</h1>')
                 .replace(/^## (.*$)/gm, '<h2>$1</h2>')
                 .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-                // Handle bullet points
+                // Bullet points
                 .replace(/^[•\-\*] (.*$)/gm, '<li>$1</li>')
-                // Handle bold text
+                // Bold text
                 .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                // Handle paragraphs
+                // Paragraphs
                 .split('\n')
                 .map(line => {
                     line = line.trim();
                     if (!line) return '';
-                    
-                    // If line contains list items, collect them
-                    if (line.includes('<li>')) {
-                        return line;
+                    if (line.startsWith('<li>') || line.startsWith('<h')) {
+                        return line; // already formatted
                     }
-                    // Skip wrapping if already a heading or other HTML
-                    if (line.startsWith('<')) {
-                        return line;
-                    }
-                    // Wrap regular text in paragraph tags
                     return `<p>${line}</p>`;
                 })
-                .filter(line => line)
+                .filter(Boolean)
                 .join('\n')
-                // Group consecutive list items into ul elements
+                // Group consecutive <li> into <ul>
                 .replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
 
             messageEl.innerHTML = `
@@ -610,7 +574,9 @@
             scrollBottomBtn.style.display = 'none';
         }
 
-        // Utility functions
+        /***************************************
+         *          FORMAT UTILITIES
+         ***************************************/
         function formatDuration(seconds) {
             const h = Math.floor(seconds / 3600);
             const m = Math.floor((seconds % 3600) / 60);
@@ -626,105 +592,79 @@
         }
 
         function formatAnalysis(analysis, videoId) {
-            // Format summary with markdown
-            const formatSummary = (summary) => {
-                if (!summary) return '';
-                
-                // Process markdown elements
-                let formatted = summary
-                    // Handle headings
+            // Convert text with minimal Markdown-like processing
+            function formatMarkdown(str) {
+                if (!str) return '';
+                return str
+                    // headings
                     .replace(/^# (.*$)/gm, '<h1>$1</h1>')
                     .replace(/^## (.*$)/gm, '<h2>$1</h2>')
                     .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-                    // Handle bullet points
+                    // bullet points
                     .replace(/^[•\-\*] (.*$)/gm, '<li>$1</li>')
-                    // Handle bold text
+                    // bold
                     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                    // Handle paragraphs
+                    // paragraphs
                     .split('\n')
                     .map(line => {
                         line = line.trim();
                         if (!line) return '';
-                        
-                        // If line contains list items, collect them
-                        if (line.includes('<li>')) {
+                        if (line.startsWith('<li>') || line.startsWith('<h')) {
                             return line;
                         }
-                        // Skip wrapping if already a heading or other HTML
-                        if (line.startsWith('<')) {
-                            return line;
-                        }
-                        // Wrap regular text in paragraph tags
                         return `<p>${line}</p>`;
                     })
-                    .filter(line => line)
+                    .filter(Boolean)
                     .join('\n')
-                    // Group consecutive list items into ul elements
                     .replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>');
+            }
 
-                return formatted;
-            };
-
-            // Format insights with importance levels and make them clickable
-            const formatInsights = (insights) => {
+            function formatInsights(insights) {
                 if (!Array.isArray(insights)) return '';
                 return insights.map(insight => {
-                    // Remove any bullet points that might be in the text
                     const cleanInsight = insight.replace(/^[•\-\*]\s*/, '');
                     return `<div class="clickable-insight" role="button" tabindex="0">${cleanInsight}</div>`;
                 }).join('');
-            };
+            }
 
-            // Format topics with varying sizes based on importance
-            const formatTopics = (topics) => {
+            function formatTopics(topics) {
                 if (!Array.isArray(topics)) return '';
-                // Shuffle topics to create more visual interest
                 return topics
                     .sort(() => Math.random() - 0.5)
                     .map(topic => {
-                        // Handle both string and object formats
                         const topicName = typeof topic === 'string' ? topic : topic.name;
-                        const importance = typeof topic === 'object' && topic.importance ? topic.importance : 1;
-                        // Remove any bullet points that might be in the text
+                        const importance = (typeof topic === 'object' && topic.importance) ? topic.importance : 1;
                         const cleanTopic = topicName.replace(/^[•\-\*]\s*/, '');
-                        // Map importance (1-5) to size classes
                         const sizeClasses = ['topic-xs', 'topic-sm', 'topic-md', 'topic-lg', 'topic-xl'];
                         const sizeClass = sizeClasses[Math.min(Math.floor(importance) - 1, 4)] || 'topic-md';
                         return `<div class="${sizeClass} clickable-topic" role="button" tabindex="0">${cleanTopic}</div>`;
                     })
                     .join('');
-            };
+            }
 
-            // Format video segments with intelligent grouping
-            const formatSegments = (timestamps, videoId) => {
+            function formatSegments(timestamps, videoId) {
                 if (!Array.isArray(timestamps)) return '';
-                
-                // Check if we have any meaningful segments
                 if (timestamps.length === 1 && timestamps[0].timestamp === 0) {
-                    return `<div class="no-segments-message">
-                        <p>This video is too short to extract meaningful segments.</p>
-                        <p>Try analyzing longer videos to see chapter breakdowns and key moments.</p>
-                    </div>`;
+                    return `
+                        <div class="no-segments-message">
+                            <p>This video is too short to extract meaningful segments.</p>
+                            <p>Try analyzing longer videos to see chapter breakdowns and key moments.</p>
+                        </div>
+                    `;
                 }
-                
-                if (!videoId) {
-                    console.error('No video ID provided for segments');
-                    return '';
-                }
-                
-                // Group segments that are too close together (within 5 seconds)
-                const groupedSegments = timestamps.reduce((acc, curr, idx) => {
+                if (!videoId) return '';
+
+                // Group segments if needed
+                const grouped = timestamps.reduce((acc, curr, idx) => {
                     if (idx === 0) {
                         acc.push([curr]);
                         return acc;
                     }
-                    
                     const prevGroup = acc[acc.length - 1];
                     const prevTs = prevGroup[prevGroup.length - 1];
-                    const timeDiff = Math.abs(parseFloat(curr.timestamp) - parseFloat(prevTs.timestamp));
+                    const diff = Math.abs(parseFloat(curr.timestamp) - parseFloat(prevTs.timestamp));
                     
-                    // If segments are close and descriptions are related, group them
-                    if (timeDiff < 5 && areDescriptionsRelated(prevTs.description, curr.description)) {
+                    if (diff < 5 && areDescriptionsRelated(prevTs.description, curr.description)) {
                         prevGroup.push(curr);
                     } else {
                         acc.push([curr]);
@@ -732,78 +672,73 @@
                     return acc;
                 }, []);
 
-                return groupedSegments.map((group, idx) => {
-                    const mainSegment = group[0];
-                    const startTime = parseFloat(mainSegment.start_timestamp).toFixed(2);
-                    const endTime = parseFloat(mainSegment.end_timestamp).toFixed(2);
+                return grouped.map((group, idx) => {
+                    const main = group[0];
+                    const startTime = parseFloat(main.start_timestamp).toFixed(2);
+                    const endTime = parseFloat(main.end_timestamp).toFixed(2);
                     const thumbnailUrl = `${kalturaConfig.baseUrl}/p/${kalturaConfig.partnerId}/thumbnail/entry_id/${videoId}/width/160/type/2/bgcolor/000000/quality/85/vid_sec/${startTime}`;
                     
-                    // Combine descriptions if there are multiple segments in the group
                     const description = group.length > 1
                         ? group.map(ts => ts.description).join(' | ')
-                        : mainSegment.description;
-                    
-                    return `<div class="segment-entry" data-start-time="${startTime}" data-end-time="${endTime}" data-video-id="${videoId}">
-                        <div class="segment-entry-content">
-                            <div class="segment-thumbnail">
-                                <img src="${thumbnailUrl}" alt="Thumbnail at ${startTime}s">
-                            </div>
-                            <div class="segment-content">
-                                <div class="segment-time">${formatDuration(startTime)} - ${formatDuration(endTime)}</div>
-                                <div class="segment-desc">${description}</div>
-                                <button class="share-moment-btn" data-moment-index="${idx}" title="Share this moment">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
-                                        <polyline points="16 6 12 2 8 6"/>
-                                        <line x1="12" y1="2" x2="12" y2="15"/>
-                                    </svg>
-                                    Share
-                                </button>
+                        : main.description;
+
+                    return `
+                        <div class="segment-entry" data-start-time="${startTime}" data-end-time="${endTime}" data-video-id="${videoId}">
+                            <div class="segment-entry-content">
+                                <div class="segment-thumbnail">
+                                    <img src="${thumbnailUrl}" alt="Thumbnail at ${startTime}s">
+                                </div>
+                                <div class="segment-content">
+                                    <div class="segment-time">${formatDuration(startTime)} - ${formatDuration(endTime)}</div>
+                                    <div class="segment-desc">${description}</div>
+                                    <button class="share-moment-btn" data-moment-index="${idx}" title="Share this moment">
+                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                            <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
+                                            <polyline points="16 6 12 2 8 6"/>
+                                            <line x1="12" y1="2" x2="12" y2="15"/>
+                                        </svg>
+                                        Share
+                                    </button>
+                                </div>
                             </div>
                         </div>
-                    </div>`;
+                    `;
                 }).join('');
-            };
+            }
 
-            // Helper function to check if descriptions are related
             function areDescriptionsRelated(desc1, desc2) {
-                // Convert descriptions to lowercase for comparison
                 const d1 = desc1.toLowerCase();
                 const d2 = desc2.toLowerCase();
-                
-                // Check for common words (excluding stop words)
                 const words1 = new Set(d1.split(/\W+/).filter(w => w.length > 3));
                 const words2 = new Set(d2.split(/\W+/).filter(w => w.length > 3));
                 
-                let commonWords = 0;
+                let common = 0;
                 for (const word of words1) {
-                    if (words2.has(word)) commonWords++;
+                    if (words2.has(word)) common++;
                 }
-                
-                // If there are enough common words, consider them related
-                return commonWords >= 2;
+                return common >= 2;
             }
 
             return `
                 <div class="tab-panel active" data-tab="summary">
                     <div class="summary">
-                        ${formatSummary(analysis.summary) || ''}
+                        ${formatMarkdown(analysis.summary)}
                     </div>
                 </div>
                 <div class="tab-panel" data-tab="insights">
                     <div class="insights">
-                        ${formatInsights(analysis.insights) || ''}
+                        ${formatInsights(analysis.insights)}
                     </div>
                 </div>
                 <div class="tab-panel" data-tab="topics">
                     <div class="topics">
-                        ${formatTopics(analysis.topics) || ''}
+                        ${formatTopics(analysis.topics)}
                     </div>
                 </div>
                 <div class="tab-panel" data-tab="segments">
                     <div class="segments">
                         <div class="segments-grid">
-                            ${formatSegments(analysis.timestamps, videoId) || ''}
+                            ${formatSegments(analysis.timestamps, videoId)}
                         </div>
                         <div class="segments-player"></div>
                     </div>
@@ -811,7 +746,9 @@
             `;
         }
 
-        // View toggle functionality
+        /***************************************
+         *          VIEW TOGGLE
+         ***************************************/
         const gridViewBtn = $('#grid-view-btn');
         const listViewBtn = $('#list-view-btn');
         const videoList = $('#video-list');
@@ -828,120 +765,168 @@
             gridViewBtn.classList.remove('active');
         });
 
-        // Social Share Modal Functionality
+        /***************************************
+         *      SOCIAL SHARE MODAL LOGIC
+         ***************************************/
         const modal = $('#social-share-modal');
-        const closeModal = $('.close-modal');
+        const closeShareModalBtn = $('#close-share-modal');
+        const shareErrorEl = $('#share-error');
+        const postTextEl = $('#post-text');
+        const hashtagsEl = $('.modal-body .hashtags');
+        const thumbnailsPreview = $('.modal-body .thumbnails-preview');
+        const reloadBtn = $('#reload-post-data-btn');
+        const linkedInBtn = $('#linkedin-share-btn');
+        const xBtn = $('#x-share-btn');
+
         let currentVideoId = null;
         let currentMomentIndex = null;
+        let postDataAbortController = null;
 
-        // Close modal when clicking close button or outside
-        closeModal.addEventListener('click', () => {
-            modal.style.display = 'none';
-        });
-
-        window.addEventListener('click', (e) => {
-            if (e.target === modal) {
-                modal.style.display = 'none';
-            }
-        });
-
-        // Handle share button clicks
-        $('#analysis-results').addEventListener('click', async (e) => {
+        // Click on "Share" button within segments
+        $('#analysis-results').addEventListener('click', (e) => {
             const shareBtn = e.target.closest('.share-moment-btn');
             if (!shareBtn) return;
 
             const momentIndex = parseInt(shareBtn.dataset.momentIndex);
             const videoId = shareBtn.closest('[data-video-id]').dataset.videoId;
-            
-            const isSameClip = currentVideoId === videoId && currentMomentIndex === momentIndex;
-            
-            // Update current values
+            showShareModal(videoId, momentIndex);
+        });
+
+        // Opens the modal and starts loading data
+        async function showShareModal(videoId, momentIndex) {
+            resetShareModal();
             currentVideoId = videoId;
             currentMomentIndex = momentIndex;
+            show(modal);
 
-            // Always reset share window content unless it's the same clip
-            if (!isSameClip) {
-                $('.modal-body .post-content textarea').value = 'Generating post...';
-                $('.modal-body .hashtags').innerHTML = '';
-                $('.modal-body .thumbnails-preview').innerHTML = '<div class="loading">Loading thumbnails...</div>';
+            await loadPostData(videoId, momentIndex);
+        }
+
+        // Close / dismiss the modal
+        function closeShareModal() {
+            resetShareModal();
+            hide(modal);
+        }
+
+        // Reset the modal to default state
+        function resetShareModal() {
+            if (postDataAbortController) {
+                postDataAbortController.abort();
+                postDataAbortController = null;
             }
-            
-            // Show modal
-            modal.style.display = 'block';
+            currentVideoId = null;
+            currentMomentIndex = null;
+
+            // Reset UI
+            shareErrorEl.style.display = 'none';
+            shareErrorEl.innerHTML = '';
+            reloadBtn.style.display = 'none';
+            postTextEl.value = '';
+            postTextEl.placeholder = 'Loading post content...';
+            thumbnailsPreview.innerHTML = '';
+            hashtagsEl.innerHTML = '';
+
+            linkedInBtn.disabled = true;
+            xBtn.disabled = true;
+        }
+
+        // Fetch social post data
+        async function loadPostData(videoId, momentIndex) {
+            postDataAbortController = new AbortController();
+            const { signal } = postDataAbortController;
+
+            // Basic loading state
+            thumbnailsPreview.innerHTML = '<div class="loading">Loading thumbnails...</div>';
+            postTextEl.value = '';
+            postTextEl.placeholder = 'Generating post...';
 
             try {
-                const response = await fetch(`/api/generate-social-post/${videoId}?moment_id=${momentIndex}`, {
-                    method: 'POST'
+                const fetchUrl = `/api/generate-social-post/${videoId}?moment_id=${momentIndex}`;
+                const response = await fetch(fetchUrl, {
+                    method: 'POST',
+                    signal,
                 });
                 const data = await response.json();
 
-                if (data.error) throw new Error(data.error);
-
-                // Handle timeout case with default content
-                if (data.error && data.thumbnails) {
-                    // Show thumbnails even if LLM timed out
-                    $('.modal-body .thumbnails-preview').innerHTML = data.thumbnails.map(url =>
-                        `<img src="${url}" alt="Moment thumbnail" class="thumbnail">`
-                    ).join('');
-                    
-                    // Use default text for sharing
-                    const defaultText = "Check out this interesting moment from the video!";
-                    const defaultHashtags = "#video #highlight";
-                    
-                    $('.modal-body .post-content textarea').value = defaultText;
-                    $('.modal-body .hashtags').innerHTML = defaultHashtags.split(' ').map(tag =>
-                        `<span class="hashtag">${tag}</span>`
-                    ).join('');
-                    
-                    // Setup share buttons with default content
-                    setupShareButtons({
-                        text: defaultText,
-                        hashtags: defaultHashtags,
-                        startTime: postData.startTime,
-                        endTime: postData.endTime
-                    });
-                } else {
-                    // Normal case - update with LLM generated content
-                    $('.modal-body .post-content textarea').value = data.text;
-                    $('.modal-body .hashtags').innerHTML = data.hashtags.split(' ').map(tag =>
-                        `<span class="hashtag">${tag}</span>`
-                    ).join('');
-
-                    // Display thumbnails
-                    $('.modal-body .thumbnails-preview').innerHTML = data.thumbnails.map(url =>
-                        `<img src="${url}" alt="Moment thumbnail" class="thumbnail">`
-                    ).join('');
-
-                    // Setup platform share buttons
-                    setupShareButtons(data);
+                if (!response.ok || data.error) {
+                    throw new Error(data.error || `Error loading post data (HTTP ${response.status})`);
                 }
 
+                // If the request wasn't aborted, proceed to populate
+                if (!signal.aborted) {
+                    postTextEl.value = data.text;
+                    hashtagsEl.innerHTML = data.hashtags
+                        .split(' ')
+                        .map(tag => `<span class="hashtag">${tag}</span>`)
+                        .join('');
+
+                    thumbnailsPreview.innerHTML = data.thumbnails
+                        .map(url => `<img src="${url}" alt="Moment thumbnail" class="thumbnail">`)
+                        .join('');
+
+                    // Enable share buttons
+                    linkedInBtn.disabled = false;
+                    xBtn.disabled = false;
+
+                    // Assign button handlers
+                    setupShareButtons({
+                        text: data.text,
+                        hashtags: data.hashtags,
+                        startTime: data.startTime,
+                        endTime: data.endTime,
+                    });
+                }
             } catch (error) {
-                $('.modal-body .post-content').innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                if (signal.aborted) {
+                    console.log('Fetch was aborted. Modal closed before data loaded.');
+                    return;
+                }
+                shareErrorEl.style.display = 'block';
+                shareErrorEl.innerHTML = `
+                    <p>Error: ${error.message}</p>
+                    <p>Please try again.</p>
+                `;
+                reloadBtn.style.display = 'inline-block';
+
+                // Clear placeholders
+                thumbnailsPreview.innerHTML = '';
+                postTextEl.value = '';
+                postTextEl.placeholder = '';
             }
+        }
+
+        // Attach event for retry
+        reloadBtn.addEventListener('click', () => {
+            if (!currentVideoId || currentMomentIndex == null) return;
+            // Hide error, re-init load
+            shareErrorEl.style.display = 'none';
+            reloadBtn.style.display = 'none';
+            loadPostData(currentVideoId, currentMomentIndex);
         });
 
+        // Assign share button onclick logic
         function setupShareButtons(postData) {
-            const linkedInBtn = $('.platform-btn.linkedin');
-            const twitterBtn = $('.platform-btn.twitter');
+            const { text, hashtags, startTime } = postData;
+            const shareUrl = `https://www.kaltura.com/index.php/extwidget/preview/partner_id/${kalturaConfig.partnerId}/uiconf_id/${kalturaConfig.uiconfId}/entry_id/${currentVideoId}/embed/dynamic?kalturaStartTime=${Math.floor(startTime)}`;
 
             linkedInBtn.onclick = () => {
-                // Create Kaltura preview URL with timestamps
-                const shareUrl = `https://www.kaltura.com/index.php/extwidget/preview/partner_id/${kalturaConfig.partnerId}/uiconf_id/${kalturaConfig.uiconfId}/entry_id/${currentVideoId}/embed/dynamic?kalturaStartTime=${Math.floor(postData.startTime)}`;
-                
-                const linkedInUrl = `https://www.linkedin.com/feed/?shareActive=true&shareUrl=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(postData.text + '\n\n' + postData.hashtags)}`;
+                const linkedInUrl = `https://www.linkedin.com/feed/?shareActive=true&shareUrl=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(text + '\n\n' + hashtags)}`;
                 window.open(linkedInUrl, '_blank', 'width=600,height=600');
             };
 
-            const xBtn = $('.platform-btn.x');
             xBtn.onclick = () => {
-                // Create Kaltura preview URL with timestamps
-                const shareUrl = `https://www.kaltura.com/index.php/extwidget/preview/partner_id/${kalturaConfig.partnerId}/uiconf_id/${kalturaConfig.uiconfId}/entry_id/${currentVideoId}/embed/dynamic?kalturaStartTime=${Math.floor(postData.startTime)}`;
-
-                const xUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(postData.text)}%20%20&url=${encodeURIComponent(shareUrl)}&hashtags=${encodeURIComponent(postData.hashtags.replace(/#/g, '').replace(/ /g, ','))}`;
+                const xUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(text)}%20%20&url=${encodeURIComponent(shareUrl)}&hashtags=${encodeURIComponent(hashtags.replace(/#/g, '').replace(/ /g, ','))}`;
                 window.open(xUrl, '_blank', 'width=600,height=600');
             };
         }
+
+        // Close modal when clicking the close button or outside
+        closeShareModalBtn.addEventListener('click', closeShareModal);
+        window.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeShareModal();
+            }
+        });
     </script>
 </body>
 </html>
