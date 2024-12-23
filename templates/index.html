@@ -282,8 +282,10 @@
             const analysisHtml = results.map((result, index) => {
                 console.log('Processing result:', result);
                 
-                // Handle different response structures
+                // Extract analysis and video_id from result
                 const analysis = result.analysis || result;
+                const videoId = result.video_id;
+                
                 if (!analysis) {
                     console.error('No analysis data in result:', result);
                     return '';
@@ -295,8 +297,8 @@
                     // If analysis is a string, use it directly
                     content = analysis;
                 } else {
-                    // Otherwise, format the object
-                    content = formatAnalysis(analysis);
+                    // Otherwise, format the object with video_id
+                    content = formatAnalysis(analysis, videoId);
                 }
 
                 // Get the video title from the selected videos
@@ -616,7 +618,7 @@
             return `${s}s`;
         }
 
-        function formatAnalysis(analysis) {
+        function formatAnalysis(analysis, videoId) {
             // Format summary with markdown
             const formatSummary = (summary) => {
                 if (!summary) return '';
@@ -687,7 +689,7 @@
             };
 
             // Format video segments with intelligent grouping
-            const formatSegments = (timestamps) => {
+            const formatSegments = (timestamps, videoId) => {
                 if (!Array.isArray(timestamps)) return '';
                 
                 // Check if we have any meaningful segments
@@ -698,9 +700,10 @@
                     </div>`;
                 }
                 
-                const firstVideoEl = document.querySelector('#video-list article.selected');
-                if (!firstVideoEl) return '';
-                const videoId = firstVideoEl.dataset.videoId;
+                if (!videoId) {
+                    console.error('No video ID provided for segments');
+                    return '';
+                }
                 
                 // Group segments that are too close together (within 5 seconds)
                 const groupedSegments = timestamps.reduce((acc, curr, idx) => {
@@ -793,7 +796,7 @@
                 <div class="tab-panel" data-tab="segments">
                     <div class="segments">
                         <div class="segments-grid">
-                            ${formatSegments(analysis.timestamps) || ''}
+                            ${formatSegments(analysis.timestamps, videoId) || ''}
                         </div>
                         <div class="segments-player"></div>
                     </div>
