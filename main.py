@@ -89,8 +89,10 @@ class TimestampEntry(BaseModel):
 class SocialPost(BaseModel):
     text: str = Field(description="The social media post text")
     hashtags: str = Field(description="Space-separated hashtags")
-    platform: str = Field(description="Target platform (LinkedIn/Twitter)")
+    platform: str = Field(description="Target platform (LinkedIn/X)")
     thumbnails: List[str] = Field(description="List of thumbnail URLs to include")
+    startTime: float = Field(description="Start timestamp of the clip in seconds")
+    endTime: float = Field(description="End timestamp of the clip in seconds")
 
 class VideoAnalysis(BaseModel):
     summary: str = Field(description="A comprehensive summary of the video content")
@@ -532,7 +534,7 @@ async def generate_social_post(video_id: str, moment_id: int):
         
         def encode_image_from_url(url: str) -> str:
             """Download image from URL and encode as base64"""
-            response = requests.get(url, timeout=10)
+            response = requests.get(url)
             response.raise_for_status()
             return base64.b64encode(response.content).decode("utf-8")
 
@@ -542,24 +544,17 @@ async def generate_social_post(video_id: str, moment_id: int):
             time_point = moment.start_timestamp + (duration / 2)  # Middle of segment
             
             # Get Kaltura session for thumbnail auth
-            ks = kaltura.client.getKs() # pylint: disable=no-member
+            # ks = kaltura.client.getKs() # pylint: disable=no-member
             thumbnail_url = (
-                f"https://cfvod.kaltura.com/p/{kaltura.partner_id}"
+                f"https://cdnapi-ev.kaltura.com/p/{kaltura.partner_id}"
                 f"/sp/{kaltura.partner_id}00/thumbnail/entry_id/{video_id}"
-                f"/width/320/vid_sec/{time_point}/ks/{ks}"
+                f"/width/320/vid_sec/{time_point}" # /ks/{ks} - in most cases this is not really needed
             )
 
-            # Download and encode thumbnail
-            base64_image = encode_image_from_url(thumbnail_url)
-
-            # Create messages array with text and encoded image
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": f"""Generate an engaging social media post for this video segment.
+            # Create message for LLM
+            message = {
+                "role": "user",
+                "content": f"""Generate an engaging social media post for this video segment.
 
 SEGMENT DETAILS:
 - Topic: {moment.topic}
@@ -576,19 +571,10 @@ Instructions:
 3. Use appropriate emojis for emphasis
 4. Include relevant hashtags
 5. Optimize for maximum reach and interaction
-6. Target both LinkedIn and Twitter platforms
+6. Target both LinkedIn and X platforms
 
 Return as SocialPost object."""
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/jpeg;base64,{base64_image}"
-                            }
-                        }
-                    ]
-                }
-            ]
+            }
 
             # Generate post using LLM with timeout
             response = await asyncio.wait_for(
@@ -596,14 +582,16 @@ Return as SocialPost object."""
                     llm_client.chat.completions.create,
                     model=MODEL_ID,
                     response_model=SocialPost,
-                    messages=messages,
+                    messages=[message],
                     temperature=MODEL_TEMPERATURE
                 ),
                 timeout=30  # 30 second timeout
             )
 
-            # Add thumbnail URL to response for UI display
+            # Add thumbnail URL and timestamps to response
             response.thumbnails = [thumbnail_url]
+            response.startTime = moment.start_timestamp
+            response.endTime = moment.end_timestamp
             return response
 
         except asyncio.TimeoutError:
