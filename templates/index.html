@@ -472,6 +472,12 @@
                 const segmentEntry = e.target.closest('.segments .segment-entry');
                 if (!segmentEntry) return;
 
+                // Check if we're clicking the same segment that's already active
+                if (activeSegment === segmentEntry) {
+                    // Same segment clicked, no need to reload player
+                    return;
+                }
+
                 if (activeSegment) {
                     activeSegment.classList.remove('active');
                 }
