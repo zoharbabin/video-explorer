@@ -82,11 +82,15 @@
                 <button class="close-modal" id="close-share-modal">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="thumbnails-preview"></div>
                 <div class="post-content">
                     <!-- Error container + Retry button (hidden by default) -->
                     <div id="share-error" class="error" style="display: none;"></div>
-                    <textarea id="post-text" rows="4" placeholder="Loading post content..."></textarea>
+                    <div class="platform-text">
+                        <h4>LinkedIn Post</h4>
+                        <textarea id="linkedin-text" rows="4" placeholder="Loading LinkedIn post..."></textarea>
+                        <h4>X Post</h4>
+                        <textarea id="x-text" rows="4" placeholder="Loading X post..."></textarea>
+                    </div>
                     <div class="hashtags"></div>
                 </div>
                 <div class="platform-buttons">
@@ -821,9 +825,10 @@
             shareErrorEl.style.display = 'none';
             shareErrorEl.innerHTML = '';
             reloadBtn.style.display = 'none';
-            postTextEl.value = '';
-            postTextEl.placeholder = 'Loading post content...';
-            thumbnailsPreview.innerHTML = '';
+            $('#linkedin-text').value = '';
+            $('#x-text').value = '';
+            $('#linkedin-text').placeholder = 'Loading LinkedIn post...';
+            $('#x-text').placeholder = 'Loading X post...';
             hashtagsEl.innerHTML = '';
 
             linkedInBtn.disabled = true;
@@ -836,9 +841,10 @@
             const { signal } = postDataAbortController;
 
             // Basic loading state
-            thumbnailsPreview.innerHTML = '<div class="loading">Loading thumbnails...</div>';
-            postTextEl.value = '';
-            postTextEl.placeholder = 'Generating post...';
+            $('#linkedin-text').value = '';
+            $('#x-text').value = '';
+            $('#linkedin-text').placeholder = 'Generating LinkedIn post...';
+            $('#x-text').placeholder = 'Generating X post...';
 
             try {
                 const fetchUrl = `/api/generate-social-post/${videoId}?moment_id=${momentIndex}`;
@@ -854,14 +860,13 @@
 
                 // If the request wasn't aborted, proceed to populate
                 if (!signal.aborted) {
-                    postTextEl.value = data.text;
-                    hashtagsEl.innerHTML = data.hashtags
+                    $('#linkedin-text').value = data.linkedin.text;
+                    $('#x-text').value = data.x.text;
+                    
+                    // Use LinkedIn hashtags for display (they're the same for both platforms)
+                    hashtagsEl.innerHTML = data.linkedin.hashtags
                         .split(' ')
                         .map(tag => `<span class="hashtag">${tag}</span>`)
-                        .join('');
-
-                    thumbnailsPreview.innerHTML = data.thumbnails
-                        .map(url => `<img src="${url}" alt="Moment thumbnail" class="thumbnail">`)
                         .join('');
 
                     // Enable share buttons
@@ -870,10 +875,9 @@
 
                     // Assign button handlers
                     setupShareButtons({
-                        text: data.text,
-                        hashtags: data.hashtags,
-                        startTime: data.startTime,
-                        endTime: data.endTime,
+                        linkedin: data.linkedin,
+                        x: data.x,
+                        metadata: data.metadata
                     });
                 }
             } catch (error) {
@@ -889,9 +893,10 @@
                 reloadBtn.style.display = 'inline-block';
 
                 // Clear placeholders
-                thumbnailsPreview.innerHTML = '';
-                postTextEl.value = '';
-                postTextEl.placeholder = '';
+                $('#linkedin-text').value = '';
+                $('#x-text').value = '';
+                $('#linkedin-text').placeholder = '';
+                $('#x-text').placeholder = '';
             }
         }
 
@@ -906,16 +911,18 @@
 
         // Assign share button onclick logic
         function setupShareButtons(postData) {
-            const { text, hashtags, startTime } = postData;
-            const shareUrl = `https://www.kaltura.com/index.php/extwidget/preview/partner_id/${kalturaConfig.partnerId}/uiconf_id/${kalturaConfig.uiconfId}/entry_id/${currentVideoId}/embed/dynamic?kalturaStartTime=${Math.floor(startTime)}`;
+            const { linkedin, x, metadata } = postData;
+            const shareUrl = `https://www.kaltura.com/index.php/extwidget/preview/partner_id/${kalturaConfig.partnerId}/uiconf_id/${kalturaConfig.uiconfId}/entry_id/${currentVideoId}/embed/dynamic?kalturaStartTime=${Math.floor(metadata.startTime)}`;
 
             linkedInBtn.onclick = () => {
-                const linkedInUrl = `https://www.linkedin.com/feed/?shareActive=true&shareUrl=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(text + '\n\n' + hashtags)}`;
+                const linkedInUrl = `https://www.linkedin.com/feed/?shareActive=true&shareUrl=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(linkedin.text + '\n\n' + linkedin.hashtags)}`;
                 window.open(linkedInUrl, '_blank', 'width=600,height=600');
             };
 
             xBtn.onclick = () => {
-                const xUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(text)}%20%20&url=${encodeURIComponent(shareUrl)}&hashtags=${encodeURIComponent(hashtags.replace(/#/g, '').replace(/ /g, ','))}`;
+                // For X, we need to remove # from hashtags and join with commas
+                const xHashtags = x.hashtags.replace(/#/g, '').split(' ').join(',');
+                const xUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(x.text)}%20%20&url=${encodeURIComponent(shareUrl)}&hashtags=${encodeURIComponent(xHashtags)}`;
                 window.open(xUrl, '_blank', 'width=600,height=600');
             };
         }

@@ -61,6 +61,7 @@ templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "t
 KALTURA_SESSION_DURATION = int(os.getenv('KALTURA_SESSION_DURATION', '86400'))
 PAGE_SIZE = int(os.getenv('PAGE_SIZE', '10'))
 MODEL_ID = os.getenv('MODEL_ID', 'anthropic.claude-3-5-sonnet-20241022-v2:0')
+SOCIAL_POST_MODEL_ID = os.getenv('SOCIAL_POST_MODEL_ID', 'anthropic.claude-3-5-haiku-20241022-v1:0')
 MODEL_TIMEOUT = int(os.getenv('MODEL_TIMEOUT', '60'))
 MODEL_MAX_TOKENS = int(os.getenv('MODEL_MAX_TOKENS', '4000'))
 MODEL_CHUNK_SIZE = int(os.getenv('MODEL_CHUNK_SIZE', '24000'))
@@ -85,12 +86,10 @@ class TimestampEntry(BaseModel):
     topic: str = Field(description="Main topic being discussed at this timestamp")
     importance: int = Field(description="Importance level (1-5)", ge=1, le=5)
     thumbnails: Optional[List[str]] = Field(default=None, description="List of thumbnail URLs for this segment")
-
 class SocialPost(BaseModel):
-    text: str = Field(description="The social media post text")
-    hashtags: str = Field(description="Space-separated hashtags")
-    platform: str = Field(description="Target platform (LinkedIn/X)")
-    thumbnails: List[str] = Field(description="List of thumbnail URLs to include")
+    linkedin_text: str = Field(description="LinkedIn post text (up to 3000 characters)")
+    x_text: str = Field(description="X (Twitter) post text (up to 280 characters)")
+    thumbnails: List[str] = Field(default_factory=list, description="List of thumbnail URLs to include")
     startTime: float = Field(description="Start timestamp of the clip in seconds")
     endTime: float = Field(description="End timestamp of the clip in seconds")
 
@@ -551,60 +550,109 @@ async def generate_social_post(video_id: str, moment_id: int):
                 f"/width/320/vid_sec/{time_point}" # /ks/{ks} - in most cases this is not really needed
             )
 
-            # Create message for LLM
+            # Create optimized message for LLM
             message = {
                 "role": "user",
-                "content": f"""Generate an engaging social media post for this video segment.
+                "content": f"""Create two platform-optimized posts for this video moment.
 
-SEGMENT DETAILS:
-- Topic: {moment.topic}
-- Description: {moment.description}
-- Duration: {duration:.1f} seconds
-- Importance: {moment.importance}/5
+MOMENT CONTEXT:
+Topic: {moment.topic}
+Description: {moment.description}
+Duration: {duration:.1f} seconds
 
-VIDEO CONTEXT:
-{json.dumps({k: v for k, v in analysis.items() if k in ['summary', 'insights']}, indent=2)}
+REQUIREMENTS:
 
-Instructions:
-1. Create a compelling, attention-grabbing post
-2. Focus on encouraging discussion and engagement
-3. Use appropriate emojis for emphasis
-4. Include relevant hashtags
-5. Optimize for maximum reach and interaction
-6. Target both LinkedIn and X platforms
+LinkedIn Post (max 3000 chars):
+- Professional and insightful tone
+- Focus on business value and learning opportunities
+- Include 2-3 relevant emojis
+- End with thought-provoking question or clear call-to-action
+- Keep hashtags minimal and professional
 
-Return as SocialPost object."""
+X Post (max 280 chars):
+- Concise and attention-grabbing
+- More casual and dynamic tone
+- 1-2 impactful emojis
+- Focus on key takeaway or surprising insight
+- Include 2-3 relevant hashtags
+
+Note: Focus solely on this specific moment's content, not the entire video.
+Suggested hashtags: #ArtifactDevelopment #PythonInnovation #SoftwareEngineering #TechInnovation #DashboardSolutions
+
+Return as SocialPost object with separate linkedin_text and x_text fields."""
             }
 
-            # Generate post using LLM with timeout
+            # Generate post using LLM with timeout using faster model
             response = await asyncio.wait_for(
                 asyncio.to_thread(
                     llm_client.chat.completions.create,
-                    model=MODEL_ID,
+                    model=SOCIAL_POST_MODEL_ID,
                     response_model=SocialPost,
                     messages=[message],
-                    temperature=MODEL_TEMPERATURE
+                    temperature=0.7,
+                    max_tokens=1000  # Limit tokens for faster response
                 ),
-                timeout=30  # 30 second timeout
+                timeout=15
             )
 
-            # Add thumbnail URL and timestamps to response
+            # Generate default hashtags based on moment topic
+            default_hashtags = [
+                "#ArtifactDevelopment",
+                "#PythonInnovation",
+                "#SoftwareEngineering",
+                "#TechInnovation",
+                "#DashboardSolutions"
+            ]
+
+            # Add metadata to response
             response.thumbnails = [thumbnail_url]
             response.startTime = moment.start_timestamp
             response.endTime = moment.end_timestamp
-            return response
+
+            # Use default hashtags
+            hashtags = ' '.join(default_hashtags)
+
+            # Return platform-specific response format with consistent structure
+            return {
+                "linkedin": {
+                    "text": response.linkedin_text,
+                    "hashtags": hashtags
+                },
+                "x": {
+                    "text": response.x_text,
+                    "hashtags": hashtags
+                },
+                "metadata": {
+                    "thumbnails": [thumbnail_url],
+                    "startTime": moment.start_timestamp,
+                    "endTime": moment.end_timestamp
+                }
+            }
 
         except asyncio.TimeoutError:
             logger.error("LLM request timed out while generating social post")
             return {
                 "error": "Request timed out. Please try again.",
-                "thumbnails": [thumbnail_url]
+                "linkedin": {"text": "", "hashtags": ""},
+                "x": {"text": "", "hashtags": ""},
+                "metadata": {
+                    "thumbnails": [thumbnail_url],
+                    "startTime": moment.start_timestamp,
+                    "endTime": moment.end_timestamp
+                }
             }
         except (requests.RequestException, ValueError, TypeError) as e:
+            error_msg = f"Failed to generate post: {str(e)}"
             logger.error("Error generating social post: %s", str(e), exc_info=True)
             return {
-                "error": f"Failed to generate post: {str(e)}",
-                "thumbnails": [thumbnail_url]
+                "error": error_msg,
+                "linkedin": {"text": "", "hashtags": ""},
+                "x": {"text": "", "hashtags": ""},
+                "metadata": {
+                    "thumbnails": [thumbnail_url],
+                    "startTime": moment.start_timestamp,
+                    "endTime": moment.end_timestamp
+                }
             }
 
     except (KalturaException, ValueError, TypeError, RuntimeError) as e:
