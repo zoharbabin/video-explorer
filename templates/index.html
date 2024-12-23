@@ -853,14 +853,21 @@
             const momentIndex = parseInt(shareBtn.dataset.momentIndex);
             const videoId = shareBtn.closest('[data-video-id]').dataset.videoId;
             
+            const isSameClip = currentVideoId === videoId && currentMomentIndex === momentIndex;
+            
+            // Update current values
             currentVideoId = videoId;
             currentMomentIndex = momentIndex;
 
-            // Show modal with loading state
+            // Always reset share window content unless it's the same clip
+            if (!isSameClip) {
+                $('.modal-body .post-content textarea').value = 'Generating post...';
+                $('.modal-body .hashtags').innerHTML = '';
+                $('.modal-body .thumbnails-preview').innerHTML = '<div class="loading">Loading thumbnails...</div>';
+            }
+            
+            // Show modal
             modal.style.display = 'block';
-            $('.modal-body .post-content textarea').value = 'Generating post...';
-            $('.modal-body .hashtags').innerHTML = '';
-            $('.modal-body .thumbnails-preview').innerHTML = '<div class="loading">Loading thumbnails...</div>';
 
             try {
                 const response = await fetch(`/api/generate-social-post/${videoId}?moment_id=${momentIndex}`, {
@@ -931,7 +938,7 @@
                 // Create Kaltura preview URL with timestamps
                 const shareUrl = `https://www.kaltura.com/index.php/extwidget/preview/partner_id/${kalturaConfig.partnerId}/uiconf_id/${kalturaConfig.uiconfId}/entry_id/${currentVideoId}/embed/dynamic?kalturaStartTime=${Math.floor(postData.startTime)}`;
 
-                const xUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(postData.text)}&url=${encodeURIComponent(shareUrl)}&hashtags=${encodeURIComponent(postData.hashtags.replace(/#/g, '').replace(/ /g, ','))}`;
+                const xUrl = `https://x.com/intent/tweet?text=${encodeURIComponent(postData.text)}%20%20&url=${encodeURIComponent(shareUrl)}&hashtags=${encodeURIComponent(postData.hashtags.replace(/#/g, '').replace(/ /g, ','))}`;
                 window.open(xUrl, '_blank', 'width=600,height=600');
             };
         }
